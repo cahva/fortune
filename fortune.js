@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.2.11
+ * Version 5.4.4
  * MIT License
  * http://fortune.js.org
  */
@@ -1410,6 +1410,7 @@ module.exports = {
   clone: require('./clone'),
   deepEqual: require('./deep_equal'),
   generateId: require('./generate_id'),
+  applyUpdate: require('./apply_update'),
 
   // i18n
   message: require('./message'),
@@ -1429,7 +1430,7 @@ module.exports = {
   unique: require('./array/unique')
 }
 
-},{"./array/filter":7,"./array/find":8,"./array/includes":9,"./array/map":10,"./array/pull":11,"./array/reduce":12,"./array/unique":13,"./assign":14,"./cast_to_number":15,"./cast_value":16,"./clone":17,"./constants":18,"./deep_equal":19,"./errors":20,"./events":21,"./generate_id":22,"./keys":24,"./message":25,"./methods":26,"./response_classes":28,"./success":29}],24:[function(require,module,exports){
+},{"./apply_update":6,"./array/filter":7,"./array/find":8,"./array/includes":9,"./array/map":10,"./array/pull":11,"./array/reduce":12,"./array/unique":13,"./assign":14,"./cast_to_number":15,"./cast_value":16,"./clone":17,"./constants":18,"./deep_equal":19,"./errors":20,"./events":21,"./generate_id":22,"./keys":24,"./message":25,"./methods":26,"./response_classes":28,"./success":29}],24:[function(require,module,exports){
 'use strict'
 
 var constants = require('./constants')
@@ -1528,6 +1529,7 @@ message.en = {
   'DeleteRecordsFail': 'Not all records specified could be deleted.',
   'UnspecifiedType': 'The type is unspecified.',
   'InvalidType': 'The requested type "{type}" is not a valid type.',
+  'InvalidLink': 'The field "{field}" does not define a link.',
   'InvalidMethod': 'The method "{method}" is unrecognized.',
   'CollisionToOne': 'Multiple records can not have the same to-one link value on the field "{field}".',
   'CollisionDuplicate': 'Duplicate ID "{id}" in the field "{field}".',
@@ -1752,7 +1754,8 @@ module.exports = function (context) {
       records = payload
 
       if (!records || !records.length)
-        throw new BadRequestError(message('CreateRecordsInvalid', language))
+        throw new BadRequestError(
+          message('CreateRecordsInvalid', language))
 
       type = context.request.type
       meta = context.request.meta
@@ -1806,7 +1809,8 @@ module.exports = function (context) {
 
       // Adapter must return something.
       if (!createdRecords.length)
-        throw new BadRequestError(message('CreateRecordsFail', language))
+        throw new BadRequestError(
+          message('CreateRecordsFail', language))
 
       records = createdRecords
 
@@ -1821,7 +1825,8 @@ module.exports = function (context) {
 
         // Each created record must have an ID.
         if (!(primaryKey in record))
-          throw new Error(message('CreateRecordMissingID', language))
+          throw new Error(
+            message('CreateRecordMissingID', language))
 
         for (k = 0, l = links.length; k < l; k++) {
           field = links[k]
@@ -2146,6 +2151,7 @@ var promise = require('../common/promise')
 var map = require('../common/array/map')
 var find = require('../common/array/find')
 var reduce = require('../common/array/reduce')
+var message = require('../common/message')
 
 var errors = require('../common/errors')
 var BadRequestError = errors.BadRequestError
@@ -2168,6 +2174,7 @@ module.exports = function include (context) {
   var ids = request.ids || []
   var include = request.include
   var meta = request.meta
+  var language = meta.language
   var response = context.response
   var transaction = context.transaction
   var records = response.records
@@ -2237,14 +2244,15 @@ module.exports = function include (context) {
 
       return ensureFields
         .then(function (records) {
-        // `cursor` refers to the current collection of records.
           return reduce(fields, function (records, field, index) {
+            // `cursor` refers to the current collection of records.
             return records.then(function (cursor) {
               currentField = recordTypes[currentType][field]
 
               if (!currentType || !currentField) return []
-              if (!(linkKey in currentField)) throw new BadRequestError(
-                'The field "' + field + '" does not define a link.')
+              if (!(linkKey in currentField))
+                throw new BadRequestError(
+                  message('InvalidLink', language, { field: field }))
 
               currentCache = {}
               currentType = currentField[linkKey]
@@ -2342,7 +2350,7 @@ function matchId (id) {
   }
 }
 
-},{"../common/array/find":8,"../common/array/map":10,"../common/array/reduce":12,"../common/errors":20,"../common/keys":24,"../common/promise":27}],36:[function(require,module,exports){
+},{"../common/array/find":8,"../common/array/map":10,"../common/array/reduce":12,"../common/errors":20,"../common/keys":24,"../common/message":25,"../common/promise":27}],36:[function(require,module,exports){
 'use strict'
 
 var promise = require('../common/promise')
@@ -2378,6 +2386,7 @@ function dispatch (options) {
 
   var context = setDefaults(options)
   var method = context.request.method
+  var hasTransaction = 'transaction' in options
 
   // Start a promise chain.
   return Promise.resolve(context)
@@ -2408,7 +2417,9 @@ function dispatch (options) {
         throw new MethodError(
           message('InvalidMethod', language, { method: method }))
 
-      return adapter.beginTransaction()
+      return hasTransaction ?
+        Promise.resolve(options.transaction) :
+        adapter.beginTransaction()
     })
 
     .then(function (transaction) {
@@ -2425,22 +2436,23 @@ function dispatch (options) {
     })
 
     .then(function (context) {
-      return context.transaction.endTransaction()
-        .then(function () {
-          var method = context.request.method
-          var response = context.response
-          var payload = response.payload
+      return hasTransaction ?
+        Promise.resolve() : context.transaction.endTransaction()
+          .then(function () {
+            var method = context.request.method
+            var response = context.response
+            var payload = response.payload
 
-          if (!payload) return new Empty(response)
-          if (method === createMethod) return new Created(response)
+            if (!payload) return new Empty(response)
+            if (method === createMethod) return new Created(response)
 
-          return new OK(response)
-        })
+            return new OK(response)
+          })
     })
 
   // This makes sure to call `endTransaction` before re-throwing the error.
     .catch(function (error) {
-      return 'transaction' in context ?
+      return 'transaction' in context && !hasTransaction ?
         context.transaction.endTransaction(error)
           .then(throwError, throwError) :
         throwError()
@@ -2717,7 +2729,7 @@ module.exports = function (context) {
               linked[field][inverseField] !== update[primaryKey])
                 removeId(id,
                   getUpdate(
-                    linkedType, linked[field][inverseField],
+                    type, linked[field][inverseField],
                     relatedUpdates, idCache),
                   inverseField, linkedIsArray)
 
@@ -3395,6 +3407,9 @@ Fortune.prototype.constructor = function Fortune (recordTypes, options) {
  *   methods only, and must be an array of objects. The objects must be the
  *   records to create, or update objects as expected by the Adapter.
  *
+ * - `transaction`: if an existing transaction should be re-used, this may
+ *   optionally be passed in. This must be ended manually.
+ *
  * The response object may contain the following keys:
  *
  * - `meta`: Meta-info of the response.
@@ -3752,21 +3767,22 @@ module.exports = function enforce (type, record, fields, meta) {
 function checkValue (field, key, value, meta) {
   var language = meta.language
   var check
+  var type = field[typeKey]
 
   // Skip `null` case.
   if (value === null) return
 
   check = find(checkInput, function (pair) {
-    return pair[0] === field[typeKey]
+    return pair[0] === type
   })
   if (check) check = check[1]
-  else check = field[typeKey]
+  else check = type
 
   // Fields may be nullable, but if they're defined, then they must be defined
   // properly.
   if (!check(value)) throw new BadRequestError(
     message(field[isArrayKey] ? 'EnforceValueArray' : 'EnforceValue',
-      language, { key: key, type: field[typeKey].name }))
+      language, { key: key, type: type.displayName || type.name }))
 }
 
 
@@ -3918,10 +3934,6 @@ function validateField (fields, key) {
 
   if (key === primaryKey)
     throw new Error('Can not define primary key "' + primaryKey + '".')
-
-  if (~stringifiedTypes.indexOf(key.toLowerCase()))
-    throw new Error('Can not define "' + key + '", which conflicts with a ' +
-      'native type.')
 
   if (key in plainObject)
     throw new Error('Can not define field name "' + key +
