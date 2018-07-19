@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.4.4
+ * Version 5.4.5
  * MIT License
  * http://fortune.js.org
  */
@@ -1039,7 +1039,9 @@ module.exports = function pull (array, values) {
   // Need to iterate backwards.
   for (i = array.length; i--;) {
     value = array[i]
-    if (!hash.hasOwnProperty(value)) clone.push(value)
+    if (!hash.hasOwnProperty(value))
+      // Unshift because it is iterating backwards.
+      clone.unshift(value)
   }
 
   return clone
