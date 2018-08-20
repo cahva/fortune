@@ -4,7 +4,7 @@
  * MIT License
  * http://fortune.js.org
  */
-(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+(function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){
 (function (Buffer){
 'use strict'
 
@@ -1618,6 +1618,972 @@ exports.Empty = responseClass.Empty
 },{"./response_classes":28}],30:[function(require,module,exports){
 'use strict'
 
+window.fortune = require('./')
+
+},{"./":31}],31:[function(require,module,exports){
+'use strict'
+
+var EventLite = require('event-lite')
+
+// Local modules.
+var memoryAdapter = require('./adapter/adapters/memory')
+var AdapterSingleton = require('./adapter/singleton')
+var validate = require('./record_type/validate')
+var ensureTypes = require('./record_type/ensure_types')
+var promise = require('./common/promise')
+var internalRequest = require('./request')
+var middlewares = internalRequest.middlewares
+
+// Static re-exports.
+var Adapter = require('./adapter')
+var common = require('./common')
+var assign = common.assign
+var methods = common.methods
+var events = common.events
+
+
+/**
+ * This is the default export of the `fortune` package. It implements a
+ * [subset of `EventEmitter`](https://www.npmjs.com/package/event-lite), and it
+ * has a few static properties attached to it that may be useful to access:
+ *
+ * - `Adapter`: abstract base class for the Adapter.
+ * - `adapters`: included adapters, defaults to memory adapter.
+ * - `errors`: custom error types, useful for throwing errors in I/O hooks.
+ * - `methods`: a hash that maps to string constants. Available are: `find`,
+ *   `create`, `update`, and `delete`.
+ * - `events`: names for events on the Fortune instance. Available are:
+ *   `change`, `sync`, `connect`, `disconnect`, `failure`.
+ * - `message`: a function which accepts the arguments (`id`, `language`,
+ *   `data`). It has properties keyed by two-letter language codes, which by
+ *   default includes only `en`.
+ * - `Promise`: assign this to set the Promise implementation that Fortune
+ *   will use.
+ */
+function Fortune (recordTypes, options) {
+  if (!(this instanceof Fortune))
+    return new Fortune(recordTypes, options)
+
+  this.constructor(recordTypes, options)
+}
+
+
+// Inherit from EventLite class.
+Fortune.prototype = new EventLite()
+
+
+/**
+ * Create a new instance, the only required input is record type definitions.
+ * The first argument must be an object keyed by name, valued by definition
+ * objects.
+ *
+ * Here are some example field definitions:
+ *
+ * ```js
+ * {
+ *   // Top level keys are names of record types.
+ *   person: {
+ *     // Data types may be singular or plural.
+ *     name: String, // Singular string value.
+ *     luckyNumbers: Array(Number), // Array of numbers.
+ *
+ *     // Relationships may be singular or plural. They must specify which
+ *     // record type it refers to, and may also specify an inverse field
+ *     // which is optional but recommended.
+ *     pets: [ Array('animal'), 'owner' ], // Has many.
+ *     employer: [ 'organization', 'employees' ], // Belongs to.
+ *     likes: Array('thing'), // Has many (no inverse).
+ *     doing: 'activity', // Belongs to (no inverse).
+ *
+ *     // Reflexive relationships are relationships in which the record type,
+ *     // the first position, is of the same type.
+ *     following: [ Array('person'), 'followers' ],
+ *     followers: [ Array('person'), 'following' ],
+ *
+ *     // Mutual relationships are relationships in which the inverse,
+ *     // the second position, is defined to be the same field on the same
+ *     // record type.
+ *     friends: [ Array('person'), 'friends' ],
+ *     spouse: [ 'person', 'spouse' ]
+ *   }
+ * }
+ * ```
+ *
+ * The above shows the shorthand which will be transformed internally to a
+ * more verbose data structure. The internal structure is as follows:
+ *
+ * ```js
+ * {
+ *   person: {
+ *     // A singular value.
+ *     name: { type: String },
+ *
+ *     // An array containing values of a single type.
+ *     luckyNumbers: { type: Number, isArray: true },
+ *
+ *     // Creates a to-many link to `animal` record type. If the field `owner`
+ *     // on the `animal` record type is not an array, this is a many-to-one
+ *     // relationship, otherwise it is many-to-many.
+ *     pets: { link: 'animal', isArray: true, inverse: 'owner' },
+ *
+ *     // The `min` and `max` keys are open to interpretation by the specific
+ *     // adapter, which may introspect the field definition.
+ *     thing: { type: Number, min: 0, max: 100 },
+ *
+ *     // Nested field definitions are invalid. Use `Object` type instead.
+ *     nested: { thing: { ... } } // Will throw an error.
+ *   }
+ * }
+ * ```
+ *
+ * The allowed native types are `String`, `Number`, `Boolean`, `Date`,
+ * `Object`, and `Buffer`. Note that the `Object` type should be a JSON
+ * serializable object that may be persisted. The only other allowed type is
+ * a `Function`, which may be used to define custom types.
+ *
+ * A custom type function should accept one argument, the value, and return a
+ * boolean based on whether the value is valid for the type or not. It may
+ * optionally have a method `compare`, used for sorting in the built-in
+ * adapters. The `compare` method should have the same signature as the native
+ * `Array.prototype.sort`.
+ *
+ * A custom type function must inherit one of the allowed native types. For
+ * example:
+ *
+ * ```js
+ * function Integer (x) { return (x | 0) === x }
+ * Integer.prototype = new Number()
+ * ```
+ *
+ * The options object may contain the following keys:
+ *
+ * - `adapter`: configuration array for the adapter. The default type is the
+ *   memory adapter. If the value is not an array, its settings will be
+ *   considered omitted.
+ *
+ *   ```js
+ *   {
+ *     adapter: [
+ *       // Must be a class that extends `Fortune.Adapter`, or a function
+ *       // that accepts the Adapter class and returns a subclass. Required.
+ *       Adapter => { ... },
+ *
+ *       // An options object that is specific to the adapter. Optional.
+ *       { ... }
+ *     ]
+ *   }
+ *   ```
+ *
+ * - `hooks`: keyed by type name, valued by an array containing an `input`
+ *   and/or `output` function at indices `0` and `1` respectively.
+ *
+ *   A hook function takes at least two arguments, the internal `context`
+ *   object and a single `record`. A special case is the `update` argument for
+ *   the `update` method.
+ *
+ *   There are only two kinds of hooks, before a record is written (input),
+ *   and after a record is read (output), both are optional. If an error occurs
+ *   within a hook function, it will be forwarded to the response. Use typed
+ *   errors to provide the appropriate feedback.
+ *
+ *   For a create request, the input hook may return the second argument
+ *   `record` either synchronously, or asynchronously as a Promise. The return
+ *   value of a delete request is inconsequential, but it may return a value or
+ *   a Promise. The `update` method accepts a `update` object as a third
+ *   parameter, which may be returned synchronously or as a Promise.
+ *
+ *   An example hook to apply a timestamp on a record before creation, and
+ *   displaying the timestamp in the server's locale:
+ *
+ *   ```js
+ *   {
+ *     recordType: [
+ *       (context, record, update) => {
+ *         switch (context.request.method) {
+ *           case 'create':
+ *             record.timestamp = new Date()
+ *             return record
+ *           case 'update': return update
+ *           case 'delete': return null
+ *         }
+ *       },
+ *       (context, record) => {
+ *         record.timestamp = record.timestamp.toLocaleString()
+ *         return record
+ *       }
+ *     ]
+ *   }
+ *   ```
+ *
+ *   Requests to update a record will **NOT** have the updates already applied
+ *   to the record.
+ *
+ *   Another feature of the input hook is that it will have access to a
+ *   temporary field `context.transaction`. This is useful for ensuring that
+ *   bulk write operations are all or nothing. Each request is treated as a
+ *   single transaction.
+ *
+ * - `documentation`: an object mapping names to descriptions. Note that there
+ *   is only one namepspace, so field names can only have one description.
+ *   This is optional, but useful for the HTML serializer, which also emits
+ *   this information as micro-data.
+ *
+ *   ```js
+ *   {
+ *     documentation: {
+ *       recordType: 'Description of a type.',
+ *       fieldName: 'Description of a field.',
+ *       anotherFieldName: {
+ *         en: 'Two letter language code indicates localized description.'
+ *       }
+ *     }
+ *   }
+ *   ```
+ *
+ * - `settings`: internal settings to configure.
+ *
+ *   ```js
+ *   {
+ *     settings: {
+ *       // Whether or not to enforce referential integrity. Default: `true`
+ *       // for server, `false` for browser.
+ *       enforceLinks: true,
+ *
+ *       // Name of the application used for display purposes.
+ *       name: 'My Awesome Application',
+ *
+ *       // Description of the application used for display purposes.
+ *       description: 'media type "application/vnd.micro+json"'
+ *     }
+ *   }
+ *   ```
+ *
+ * The return value of the constructor is the instance itself.
+ *
+ * @param {Object} [recordTypes]
+ * @param {Object} [options]
+ * @return {Fortune}
+ */
+Fortune.prototype.constructor = function Fortune (recordTypes, options) {
+  var self = this
+  var plainObject = {}
+  var message = common.message.copy()
+  var adapter, method, stack, flows, type, hooks, i, j
+
+  if (recordTypes === void 0) recordTypes = {}
+  if (options === void 0) options = {}
+
+  if (!('adapter' in options)) options.adapter = [ memoryAdapter(Adapter) ]
+  if (!('settings' in options)) options.settings = {}
+  if (!('hooks' in options)) options.hooks = {}
+  if (!('enforceLinks' in options.settings))
+    options.settings.enforceLinks = true
+
+  // Bind middleware methods to instance.
+  flows = {}
+  for (method in methods) {
+    stack = [ middlewares[method], middlewares.include, middlewares.end ]
+
+    for (i = 0, j = stack.length; i < j; i++)
+      stack[i] = bindMiddleware(self, stack[i])
+
+    flows[methods[method]] = stack
+  }
+
+  hooks = options.hooks
+
+  // Validate hooks.
+  for (type in hooks) {
+    if (!recordTypes.hasOwnProperty(type)) throw new Error(
+      'Attempted to define hook on "' + type + '" type ' +
+      'which does not exist.')
+    if (!Array.isArray(hooks[type]))
+      throw new TypeError('Hook value for "' + type + '" type ' +
+        'must be an array.')
+  }
+
+  // Validate record types.
+  for (type in recordTypes) {
+    if (type in plainObject)
+      throw new Error('Can not define type name "' + type +
+        '" which is in Object.prototype.')
+
+    validate(recordTypes[type])
+    if (!hooks.hasOwnProperty(type)) hooks[type] = []
+  }
+
+  /*!
+   * Adapter singleton that is coupled to the Fortune instance.
+   *
+   * @type {Adapter}
+   */
+  adapter = new AdapterSingleton({
+    adapter: options.adapter,
+    recordTypes: recordTypes,
+    hooks: hooks,
+    message: message
+  })
+
+  // Internal properties.
+  Object.defineProperties(self, {
+    // 0 = not started, 1 = started, 2 = done.
+    connectionStatus: { value: 0, writable: true },
+
+    // Configuration settings.
+    options: { value: options },
+    hooks: { value: hooks },
+    recordTypes: { value: recordTypes, enumerable: true },
+    message: { value: message, enumerable: true },
+
+    // Singleton instances.
+    adapter: { value: adapter, enumerable: true, configurable: true },
+
+    // Various flows for methods.
+    flows: { value: flows }
+  })
+}
+
+
+/**
+ * This is the primary method for initiating a request. The options object
+ * may contain the following keys:
+ *
+ * - `method`: The method is a either a function or a constant, which is keyed
+ *   under `Fortune.common.methods` and may be one of `find`, `create`,
+ *   `update`, or `delete`. Default: `find`.
+ *
+ * - `type`: Name of a type. **Required**.
+ *
+ * - `ids`: An array of IDs. Used for `find` and `delete` methods only. This is
+ *   optional for the `find` method.
+ *
+ * - `include`: A 3-dimensional array specifying links to include. The first
+ *   dimension is a list, the second dimension is depth, and the third
+ *   dimension is an optional tuple with field and query options. For example:
+ *   `[['comments'], ['comments', ['author', { ... }]]]`.
+ *
+ * - `options`: Exactly the same as the [`find` method](#adapter-find)
+ *   options in the adapter. These options do not apply on methods other than
+ *   `find`, and do not affect the records returned from `include`. Optional.
+ *
+ * - `meta`: Meta-information object of the request. Optional.
+ *
+ * - `payload`: Payload of the request. **Required** for `create` and `update`
+ *   methods only, and must be an array of objects. The objects must be the
+ *   records to create, or update objects as expected by the Adapter.
+ *
+ * - `transaction`: if an existing transaction should be re-used, this may
+ *   optionally be passed in. This must be ended manually.
+ *
+ * The response object may contain the following keys:
+ *
+ * - `meta`: Meta-info of the response.
+ *
+ * - `payload`: An object containing the following keys:
+ *   - `records`: An array of records returned.
+ *   - `count`: Total number of records without options applied (only for
+ *     responses to the `find` method).
+ *   - `include`: An object keyed by type, valued by arrays of included
+ *     records.
+ *
+ * The resolved response object should always be an instance of a response
+ * type.
+ *
+ * @param {Object} options
+ * @return {Promise}
+ */
+Fortune.prototype.request = function (options) {
+  var self = this
+  var connectionStatus = self.connectionStatus
+  var Promise = promise.Promise
+
+  if (connectionStatus === 0)
+    return self.connect()
+      .then(function () { return internalRequest.call(self, options) })
+
+  else if (connectionStatus === 1)
+    return new Promise(function (resolve, reject) {
+      // Wait for changes to connection status.
+      self.once(events.failure, function () {
+        reject(new Error('Connection failed.'))
+      })
+      self.once(events.connect, function () {
+        resolve(internalRequest.call(self, options))
+      })
+    })
+
+  return internalRequest.call(self, options)
+}
+
+
+/**
+ * The `find` method retrieves record by type given IDs, querying options,
+ * or both. This is a convenience method that wraps around the `request`
+ * method, see the `request` method for documentation on its arguments.
+ *
+ * @param {String} type
+ * @param {*|*[]} [ids]
+ * @param {Object} [options]
+ * @param {Array[]} [include]
+ * @param {Object} [meta]
+ * @return {Promise}
+ */
+Fortune.prototype.find = function (type, ids, options, include, meta) {
+  var obj = { method: methods.find, type: type }
+
+  if (ids) obj.ids = Array.isArray(ids) ? ids : [ ids ]
+  if (options) obj.options = options
+  if (include) obj.include = include
+  if (meta) obj.meta = meta
+
+  return this.request(obj)
+}
+
+
+/**
+ * The `create` method creates records by type given records to create. This
+ * is a convenience method that wraps around the `request` method, see the
+ * request `method` for documentation on its arguments.
+ *
+ * @param {String} type
+ * @param {Object|Object[]} records
+ * @param {Array[]} [include]
+ * @param {Object} [meta]
+ * @return {Promise}
+ */
+Fortune.prototype.create = function (type, records, include, meta) {
+  var options = { method: methods.create, type: type,
+    payload: Array.isArray(records) ? records : [ records ] }
+
+  if (include) options.include = include
+  if (meta) options.meta = meta
+
+  return this.request(options)
+}
+
+
+/**
+ * The `update` method updates records by type given update objects. See the
+ * [Adapter.update](#adapter-update) method for the format of the update
+ * objects. This is a convenience method that wraps around the `request`
+ * method, see the `request` method for documentation on its arguments.
+ *
+ * @param {String} type
+ * @param {Object|Object[]} updates
+ * @param {Array[]} [include]
+ * @param {Object} [meta]
+ * @return {Promise}
+ */
+Fortune.prototype.update = function (type, updates, include, meta) {
+  var options = { method: methods.update, type: type,
+    payload: Array.isArray(updates) ? updates : [ updates ] }
+
+  if (include) options.include = include
+  if (meta) options.meta = meta
+
+  return this.request(options)
+}
+
+
+/**
+ * The `delete` method deletes records by type given IDs (optional). This is a
+ * convenience method that wraps around the `request` method, see the `request`
+ * method for documentation on its arguments.
+ *
+ * @param {String} type
+ * @param {*|*[]} [ids]
+ * @param {Array[]} [include]
+ * @param {Object} [meta]
+ * @return {Promise}
+ */
+Fortune.prototype.delete = function (type, ids, include, meta) {
+  var options = { method: methods.delete, type: type }
+
+  if (ids) options.ids = Array.isArray(ids) ? ids : [ ids ]
+  if (include) options.include = include
+  if (meta) options.meta = meta
+
+  return this.request(options)
+}
+
+
+/**
+ * This method does not need to be called manually, it is automatically called
+ * upon the first request if it is not connected already. However, it may be
+ * useful if manually reconnect is needed. The resolved value is the instance
+ * itself.
+ *
+ * @return {Promise}
+ */
+Fortune.prototype.connect = function () {
+  var self = this
+  var Promise = promise.Promise
+
+  if (self.connectionStatus === 1)
+    return Promise.reject(new Error('Connection is in progress.'))
+
+  else if (self.connectionStatus === 2)
+    return Promise.reject(new Error('Connection is already done.'))
+
+  self.connectionStatus = 1
+
+  return new Promise(function (resolve, reject) {
+    Object.defineProperty(self, 'denormalizedFields', {
+      value: ensureTypes(self.recordTypes),
+      writable: true,
+      configurable: true
+    })
+
+    self.adapter.connect().then(function () {
+      self.connectionStatus = 2
+      self.emit(events.connect)
+      return resolve(self)
+    }, function (error) {
+      self.connectionStatus = 0
+      self.emit(events.failure)
+      return reject(error)
+    })
+  })
+}
+
+
+/**
+ * Close adapter connection, and reset connection state. The resolved value is
+ * the instance itself.
+ *
+ * @return {Promise}
+ */
+Fortune.prototype.disconnect = function () {
+  var self = this
+  var Promise = promise.Promise
+
+  if (self.connectionStatus !== 2)
+    return Promise.reject(new Error('Instance has not been connected.'))
+
+  self.connectionStatus = 1
+
+  return new Promise(function (resolve, reject) {
+    return self.adapter.disconnect().then(function () {
+      self.connectionStatus = 0
+      self.emit(events.disconnect)
+      return resolve(self)
+    }, function (error) {
+      self.connectionStatus = 2
+      self.emit(events.failure)
+      return reject(error)
+    })
+  })
+}
+
+
+// Useful for dependency injection. All instances of Fortune have the same
+// common internal dependencies.
+Fortune.prototype.common = common
+
+
+// Assign useful static properties to the default export.
+assign(Fortune, {
+  Adapter: Adapter,
+  adapters: {
+    memory: memoryAdapter(Adapter)
+  },
+  errors: common.errors,
+  message: common.message,
+  methods: methods,
+  events: events
+})
+
+
+// Set the `Promise` property.
+Object.defineProperty(Fortune, 'Promise', {
+  enumerable: true,
+  get: function () {
+    return promise.Promise
+  },
+  set: function (value) {
+    promise.Promise = value
+  }
+})
+
+
+// Internal helper function.
+function bindMiddleware (scope, method) {
+  return function (x) {
+    return method.call(scope, x)
+  }
+}
+
+
+module.exports = Fortune
+
+},{"./adapter":4,"./adapter/adapters/memory":3,"./adapter/singleton":5,"./common":23,"./common/promise":27,"./record_type/ensure_types":33,"./record_type/validate":34,"./request":41,"event-lite":48}],32:[function(require,module,exports){
+(function (Buffer){
+'use strict'
+
+var message = require('../common/message')
+var find = require('../common/array/find')
+
+var errors = require('../common/errors')
+var BadRequestError = errors.BadRequestError
+
+var keys = require('../common/keys')
+var primaryKey = keys.primary
+var typeKey = keys.type
+var linkKey = keys.link
+var isArrayKey = keys.isArray
+
+
+// Check input values.
+var checkInput = [
+  [ String, function (value) {
+    return typeof value === 'string'
+  } ],
+  [ Number, function (value) {
+    return typeof value === 'number'
+  } ],
+  [ Boolean, function (value) {
+    return typeof value === 'boolean'
+  } ],
+  [ Date, function (value) {
+    return value && typeof value.getTime === 'function' &&
+      !Number.isNaN(value.getTime())
+  } ],
+  [ Object, function (value) {
+    return value !== null && typeof value === 'object'
+  } ],
+  [ Buffer, function (value) {
+    return Buffer.isBuffer(value)
+  } ]
+]
+
+
+/**
+ * Throw errors for mismatched types on a record.
+ *
+ * @param {String} type
+ * @param {Object} record
+ * @param {Object} fields
+ * @param {Object} meta
+ * @return {Object}
+ */
+module.exports = function enforce (type, record, fields, meta) {
+  var i, j, key, value, fieldDefinition, language
+
+  if (!meta) meta = {}
+  language = meta.language
+
+  for (key in record) {
+    fieldDefinition = fields[key]
+
+    if (!fieldDefinition) {
+      if (key !== primaryKey) delete record[key]
+      continue
+    }
+
+    value = record[key]
+
+    if (fieldDefinition[typeKey]) {
+      if (fieldDefinition[isArrayKey]) {
+        // If the field is defined as an array but the value is not,
+        // then throw an error.
+        if (!Array.isArray(value))
+          throw new BadRequestError(message('EnforceArrayType', language, {
+            key: key, type: fieldDefinition[typeKey].name
+          }))
+
+        for (i = 0, j = value.length; i < j; i++)
+          checkValue(fieldDefinition, key, value[i], meta)
+      }
+      else checkValue(fieldDefinition, key, value, meta)
+
+      continue
+    }
+
+    if (fieldDefinition[linkKey]) {
+      if (fieldDefinition[isArrayKey]) {
+        if (!Array.isArray(value))
+          throw new BadRequestError(
+            message('EnforceArray', language, { key: key }))
+
+        if (type === fieldDefinition[linkKey] &&
+          find(value, matchId(record[primaryKey])))
+          throw new BadRequestError(
+            message('EnforceSameID', language, { key: key }))
+
+        continue
+      }
+
+      if (Array.isArray(value))
+        throw new BadRequestError(
+          message('EnforceSingular', language, { key: key }))
+
+      if (type === fieldDefinition[linkKey] && record[primaryKey] === value)
+        throw new BadRequestError(
+          message('EnforceSameID', language, { key: key }))
+
+      continue
+    }
+  }
+
+  return record
+}
+
+
+function checkValue (field, key, value, meta) {
+  var language = meta.language
+  var check
+  var type = field[typeKey]
+
+  // Skip `null` case.
+  if (value === null) return
+
+  check = find(checkInput, function (pair) {
+    return pair[0] === type
+  })
+  if (check) check = check[1]
+  else check = type
+
+  // Fields may be nullable, but if they're defined, then they must be defined
+  // properly.
+  if (!check(value)) throw new BadRequestError(
+    message(field[isArrayKey] ? 'EnforceValueArray' : 'EnforceValue',
+      language, { key: key, type: type.displayName || type.name }))
+}
+
+
+function matchId (a) {
+  return function (b) {
+    return a === b
+  }
+}
+
+}).call(this,require("buffer").Buffer)
+},{"../common/array/find":8,"../common/errors":20,"../common/keys":24,"../common/message":25,"buffer":46}],33:[function(require,module,exports){
+'use strict'
+
+var keys = require('../common/keys')
+var linkKey = keys.link
+var inverseKey = keys.inverse
+var isArrayKey = keys.isArray
+var denormalizedInverseKey = keys.denormalizedInverse
+
+
+// Generate denormalized inverse field name.
+var denormalizedPrefix = '__'
+var denormalizedDelimiter = '_'
+var denormalizedPostfix = '_inverse'
+
+
+/**
+ * Analyze the `types` object to see if `link` and `inverse` values are
+ * valid. Also assign denormalized inverse fields.
+ *
+ * @param {Object} types
+ * @return {Object}
+ */
+module.exports = function ensureTypes (types) {
+  var denormalizedFields = {}
+  var type, field, definition, linkedFields,
+    denormalizedField, denormalizedDefinition
+
+  for (type in types)
+    for (field in types[type]) {
+      definition = types[type][field]
+
+      if (!(linkKey in definition)) continue
+
+      if (!types.hasOwnProperty(definition[linkKey]))
+        throw new Error('The value for "' + linkKey + '" on "' + field +
+          '" in type "' + type +
+          '" is invalid, the record type does not exist.')
+
+      linkedFields = types[definition[linkKey]]
+
+      if (inverseKey in definition) {
+        if (!linkedFields.hasOwnProperty(definition[inverseKey]))
+          throw new Error('The value for "' + inverseKey + '" on "' + field +
+            '" in type "' + type + '" is invalid, the field does not exist.')
+
+        if (linkedFields[definition[inverseKey]][inverseKey] !== field)
+          throw new Error('The value for "' + inverseKey + '" on "' + field +
+            '" in type "' + type +
+            '" is invalid, the inversely related field must define its ' +
+            'inverse as "' + field + '".')
+
+        if (linkedFields[definition[inverseKey]][linkKey] !== type)
+          throw new Error('The value for "' + linkKey + '" on "' + field +
+            '" in type "' + type +
+            '" is invalid, the inversely related field must define its link ' +
+            'as "' + type + '".')
+
+        continue
+      }
+
+      // Need to assign denormalized inverse. The denormalized inverse field
+      // is basically an automatically assigned inverse field that should
+      // not be visible to the client, but exists in the data store.
+      denormalizedField = denormalizedPrefix + type +
+        denormalizedDelimiter + field + denormalizedPostfix
+
+      denormalizedFields[denormalizedField] = true
+
+      Object.defineProperty(definition, inverseKey, {
+        value: denormalizedField
+      })
+
+      denormalizedDefinition = {}
+      denormalizedDefinition[linkKey] = type
+      denormalizedDefinition[inverseKey] = field
+      denormalizedDefinition[isArrayKey] = true
+      denormalizedDefinition[denormalizedInverseKey] = true
+
+      Object.defineProperty(linkedFields, denormalizedField, {
+        value: denormalizedDefinition
+      })
+    }
+
+  return denormalizedFields
+}
+
+},{"../common/keys":24}],34:[function(require,module,exports){
+(function (Buffer){
+'use strict'
+
+var find = require('../common/array/find')
+var map = require('../common/array/map')
+
+var keys = require('../common/keys')
+var primaryKey = keys.primary
+var typeKey = keys.type
+var linkKey = keys.link
+var inverseKey = keys.inverse
+var isArrayKey = keys.isArray
+
+var plainObject = {}
+var nativeTypes = [ String, Number, Boolean, Date, Object, Buffer ]
+var stringifiedTypes = map(nativeTypes, function (nativeType) {
+  return nativeType.name.toLowerCase()
+})
+
+
+/**
+ * Given a hash of field definitions, validate that the definitions are in the
+ * correct format.
+ *
+ * @param {Object} fields
+ * @return {Object}
+ */
+module.exports = function validate (fields) {
+  var key
+
+  if (typeof fields !== 'object')
+    throw new TypeError('Type definition must be an object.')
+
+  for (key in fields) validateField(fields, key)
+
+  return fields
+}
+
+
+/**
+ * Parse a field definition.
+ *
+ * @param {Object} fields
+ * @param {String} key
+ */
+function validateField (fields, key) {
+  var value = fields[key] = castShorthand(fields[key])
+
+  if (typeof value !== 'object' || value.constructor !== Object)
+    throw new TypeError('The definition of "' + key + '" must be an object.')
+
+  if (key === primaryKey)
+    throw new Error('Can not define primary key "' + primaryKey + '".')
+
+  if (key in plainObject)
+    throw new Error('Can not define field name "' + key +
+      '" which is in Object.prototype.')
+
+  if (!value[typeKey] && !value[linkKey])
+    throw new Error('The definition of "' + key + '" must contain either ' +
+      'the "' + typeKey + '" or "' + linkKey + '" property.')
+
+  if (value[typeKey] && value[linkKey])
+    throw new Error('Can not define both "' + typeKey + '" and "' + linkKey +
+      '" on "' + key + '".')
+
+  if (value[typeKey]) {
+    if (typeof value[typeKey] === 'string')
+      value[typeKey] = nativeTypes[
+        stringifiedTypes.indexOf(value[typeKey].toLowerCase())]
+
+    if (typeof value[typeKey] !== 'function')
+      throw new Error('The "' + typeKey + '" on "' + key +
+        '" must be a function.')
+
+    if (!find(nativeTypes, function (type) {
+      return type === value[typeKey].prototype.constructor
+    }))
+      throw new Error('The "' + typeKey + '" on "' + key + '" must inherit ' +
+        'from a valid native type.')
+
+    if (value[inverseKey])
+      throw new Error('The field "' + inverseKey + '" may not be defined ' +
+        'on "' + key + '".')
+  }
+
+  if (value[linkKey]) {
+    if (typeof value[linkKey] !== 'string')
+      throw new TypeError('The "' + linkKey + '" on "' + key +
+        '" must be a string.')
+
+    if (value[inverseKey] && typeof value[inverseKey] !== 'string')
+      throw new TypeError('The "' + inverseKey + '" on "' + key + '" ' +
+        'must be a string.')
+  }
+
+  if (value[isArrayKey] && typeof value[isArrayKey] !== 'boolean')
+    throw new TypeError('The key "' + isArrayKey + '" on "' + key + '" ' +
+        'must be a boolean.')
+}
+
+
+/**
+ * Cast shorthand definition to standard definition.
+ *
+ * @param {*} value
+ * @return {Object}
+ */
+function castShorthand (value) {
+  var obj
+
+  if (typeof value === 'string') obj = { link: value }
+  else if (typeof value === 'function') obj = { type: value }
+  else if (Array.isArray(value)) {
+    obj = {}
+
+    if (value[1]) obj.inverse = value[1]
+    else obj.isArray = true
+
+    // Extract type or link.
+    if (Array.isArray(value[0])) {
+      obj.isArray = true
+      value = value[0][0]
+    }
+    else value = value[0]
+
+    if (typeof value === 'string') obj.link = value
+    else if (typeof value === 'function') obj.type = value
+  }
+  else return value
+
+  return obj
+}
+
+}).call(this,require("buffer").Buffer)
+},{"../common/array/find":8,"../common/array/map":10,"../common/keys":24,"buffer":46}],35:[function(require,module,exports){
+'use strict'
+
 var message = require('../common/message')
 var promise = require('../common/promise')
 var unique = require('../common/array/unique')
@@ -1702,7 +2668,7 @@ function checkLinks (transaction, record, fields, links, meta) {
     })
 }
 
-},{"../common/array/includes":9,"../common/array/map":10,"../common/array/unique":13,"../common/errors":20,"../common/keys":24,"../common/message":25,"../common/promise":27}],31:[function(require,module,exports){
+},{"../common/array/includes":9,"../common/array/map":10,"../common/array/unique":13,"../common/errors":20,"../common/keys":24,"../common/message":25,"../common/promise":27}],36:[function(require,module,exports){
 'use strict'
 
 var validateRecords = require('./validate_records')
@@ -1885,7 +2851,7 @@ module.exports = function (context) {
     })
 }
 
-},{"../common/array/map":10,"../common/constants":18,"../common/errors":20,"../common/message":25,"../common/promise":27,"../record_type/enforce":42,"./check_links":30,"./update_helpers":38,"./validate_records":39}],32:[function(require,module,exports){
+},{"../common/array/map":10,"../common/constants":18,"../common/errors":20,"../common/message":25,"../common/promise":27,"../record_type/enforce":32,"./check_links":35,"./update_helpers":43,"./validate_records":44}],37:[function(require,module,exports){
 'use strict'
 
 var message = require('../common/message')
@@ -2031,7 +2997,7 @@ module.exports = function (context) {
     })
 }
 
-},{"../common/array/map":10,"../common/constants":18,"../common/errors":20,"../common/message":25,"../common/promise":27,"./update_helpers":38}],33:[function(require,module,exports){
+},{"../common/array/map":10,"../common/constants":18,"../common/errors":20,"../common/message":25,"../common/promise":27,"./update_helpers":43}],38:[function(require,module,exports){
 'use strict'
 
 var map = require('../common/array/map')
@@ -2116,7 +3082,7 @@ module.exports = function (context) {
     })
 }
 
-},{"../common/array/map":10,"../common/promise":27}],34:[function(require,module,exports){
+},{"../common/array/map":10,"../common/promise":27}],39:[function(require,module,exports){
 'use strict'
 
 /**
@@ -2146,7 +3112,7 @@ module.exports = function (context) {
     })
 }
 
-},{}],35:[function(require,module,exports){
+},{}],40:[function(require,module,exports){
 'use strict'
 
 var promise = require('../common/promise')
@@ -2352,7 +3318,7 @@ function matchId (id) {
   }
 }
 
-},{"../common/array/find":8,"../common/array/map":10,"../common/array/reduce":12,"../common/errors":20,"../common/keys":24,"../common/message":25,"../common/promise":27}],36:[function(require,module,exports){
+},{"../common/array/find":8,"../common/array/map":10,"../common/array/reduce":12,"../common/errors":20,"../common/keys":24,"../common/message":25,"../common/promise":27}],41:[function(require,module,exports){
 'use strict'
 
 var promise = require('../common/promise')
@@ -2374,13 +3340,13 @@ var createMethod = methods.create
 
 
 /*!
- * Internal function to dispatch a request. Must be called in the context of
+ * Internal function to send a request. Must be called in the context of
  * the Fortune instance.
  *
  * @param {Object} options
  * @return {Promise}
  */
-function dispatch (options) {
+function internalRequest (options) {
   var Promise = promise.Promise
   var flows = this.flows
   var recordTypes = this.recordTypes
@@ -2467,7 +3433,7 @@ function dispatch (options) {
 
 
 // Re-exporting internal middlewares.
-dispatch.middlewares = {
+internalRequest.middlewares = {
   create: require('./create'),
   'delete': require('./delete'),
   update: require('./update'),
@@ -2506,9 +3472,9 @@ function setDefaults (options) {
 }
 
 
-module.exports = dispatch
+module.exports = internalRequest
 
-},{"../common/array/unique":13,"../common/assign":14,"../common/message":25,"../common/methods":26,"../common/promise":27,"../common/response_classes":28,"./create":31,"./delete":32,"./end":33,"./find":34,"./include":35,"./update":37}],37:[function(require,module,exports){
+},{"../common/array/unique":13,"../common/assign":14,"../common/message":25,"../common/methods":26,"../common/promise":27,"../common/response_classes":28,"./create":36,"./delete":37,"./end":38,"./find":39,"./include":40,"./update":42}],42:[function(require,module,exports){
 'use strict'
 
 var deepEqual = require('../common/deep_equal')
@@ -2901,7 +3867,7 @@ function dropFields (update, fields) {
     if (!fields.hasOwnProperty(field)) delete update.push[field]
 }
 
-},{"../common/apply_update":6,"../common/array/find":8,"../common/array/includes":9,"../common/array/map":10,"../common/assign":14,"../common/clone":17,"../common/constants":18,"../common/deep_equal":19,"../common/errors":20,"../common/message":25,"../common/promise":27,"../record_type/enforce":42,"./check_links":30,"./update_helpers":38,"./validate_records":39}],38:[function(require,module,exports){
+},{"../common/apply_update":6,"../common/array/find":8,"../common/array/includes":9,"../common/array/map":10,"../common/assign":14,"../common/clone":17,"../common/constants":18,"../common/deep_equal":19,"../common/errors":20,"../common/message":25,"../common/promise":27,"../record_type/enforce":32,"./check_links":35,"./update_helpers":43,"./validate_records":44}],43:[function(require,module,exports){
 'use strict'
 
 var find = require('../common/array/find')
@@ -2981,7 +3947,7 @@ exports.scrubDenormalizedUpdates = function (updates, denormalizedFields) {
   }
 }
 
-},{"../common/array/find":8,"../common/keys":24}],39:[function(require,module,exports){
+},{"../common/array/find":8,"../common/keys":24}],44:[function(require,module,exports){
 'use strict'
 
 var message = require('../common/message')
@@ -3052,973 +4018,7 @@ module.exports = function validateRecords (records, fields, links, meta) {
   }
 }
 
-},{"../common/errors":20,"../common/keys":24,"../common/message":25}],40:[function(require,module,exports){
-'use strict'
-
-window.fortune = require('./')
-
-},{"./":41}],41:[function(require,module,exports){
-'use strict'
-
-var EventLite = require('event-lite')
-
-// Local modules.
-var memoryAdapter = require('./adapter/adapters/memory')
-var AdapterSingleton = require('./adapter/singleton')
-var validate = require('./record_type/validate')
-var ensureTypes = require('./record_type/ensure_types')
-var promise = require('./common/promise')
-var dispatch = require('./dispatch')
-var middlewares = dispatch.middlewares
-
-// Static re-exports.
-var Adapter = require('./adapter')
-var common = require('./common')
-var assign = common.assign
-var methods = common.methods
-var events = common.events
-
-
-/**
- * This is the default export of the `fortune` package. It implements a
- * [subset of `EventEmitter`](https://www.npmjs.com/package/event-lite), and it
- * has a few static properties attached to it that may be useful to access:
- *
- * - `Adapter`: abstract base class for the Adapter.
- * - `adapters`: included adapters, defaults to memory adapter.
- * - `errors`: custom error types, useful for throwing errors in I/O hooks.
- * - `methods`: a hash that maps to string constants. Available are: `find`,
- *   `create`, `update`, and `delete`.
- * - `events`: names for events on the Fortune instance. Available are:
- *   `change`, `sync`, `connect`, `disconnect`, `failure`.
- * - `message`: a function which accepts the arguments (`id`, `language`,
- *   `data`). It has properties keyed by two-letter language codes, which by
- *   default includes only `en`.
- * - `Promise`: assign this to set the Promise implementation that Fortune
- *   will use.
- */
-function Fortune (recordTypes, options) {
-  if (!(this instanceof Fortune))
-    return new Fortune(recordTypes, options)
-
-  this.constructor(recordTypes, options)
-}
-
-
-// Inherit from EventLite class.
-Fortune.prototype = new EventLite()
-
-
-/**
- * Create a new instance, the only required input is record type definitions.
- * The first argument must be an object keyed by name, valued by definition
- * objects.
- *
- * Here are some example field definitions:
- *
- * ```js
- * {
- *   // Top level keys are names of record types.
- *   person: {
- *     // Data types may be singular or plural.
- *     name: String, // Singular string value.
- *     luckyNumbers: Array(Number), // Array of numbers.
- *
- *     // Relationships may be singular or plural. They must specify which
- *     // record type it refers to, and may also specify an inverse field
- *     // which is optional but recommended.
- *     pets: [ Array('animal'), 'owner' ], // Has many.
- *     employer: [ 'organization', 'employees' ], // Belongs to.
- *     likes: Array('thing'), // Has many (no inverse).
- *     doing: 'activity', // Belongs to (no inverse).
- *
- *     // Reflexive relationships are relationships in which the record type,
- *     // the first position, is of the same type.
- *     following: [ Array('person'), 'followers' ],
- *     followers: [ Array('person'), 'following' ],
- *
- *     // Mutual relationships are relationships in which the inverse,
- *     // the second position, is defined to be the same field on the same
- *     // record type.
- *     friends: [ Array('person'), 'friends' ],
- *     spouse: [ 'person', 'spouse' ]
- *   }
- * }
- * ```
- *
- * The above shows the shorthand which will be transformed internally to a
- * more verbose data structure. The internal structure is as follows:
- *
- * ```js
- * {
- *   person: {
- *     // A singular value.
- *     name: { type: String },
- *
- *     // An array containing values of a single type.
- *     luckyNumbers: { type: Number, isArray: true },
- *
- *     // Creates a to-many link to `animal` record type. If the field `owner`
- *     // on the `animal` record type is not an array, this is a many-to-one
- *     // relationship, otherwise it is many-to-many.
- *     pets: { link: 'animal', isArray: true, inverse: 'owner' },
- *
- *     // The `min` and `max` keys are open to interpretation by the specific
- *     // adapter, which may introspect the field definition.
- *     thing: { type: Number, min: 0, max: 100 },
- *
- *     // Nested field definitions are invalid. Use `Object` type instead.
- *     nested: { thing: { ... } } // Will throw an error.
- *   }
- * }
- * ```
- *
- * The allowed native types are `String`, `Number`, `Boolean`, `Date`,
- * `Object`, and `Buffer`. Note that the `Object` type should be a JSON
- * serializable object that may be persisted. The only other allowed type is
- * a `Function`, which may be used to define custom types.
- *
- * A custom type function should accept one argument, the value, and return a
- * boolean based on whether the value is valid for the type or not. It may
- * optionally have a method `compare`, used for sorting in the built-in
- * adapters. The `compare` method should have the same signature as the native
- * `Array.prototype.sort`.
- *
- * A custom type function must inherit one of the allowed native types. For
- * example:
- *
- * ```js
- * function Integer (x) { return (x | 0) === x }
- * Integer.prototype = new Number()
- * ```
- *
- * The options object may contain the following keys:
- *
- * - `adapter`: configuration array for the adapter. The default type is the
- *   memory adapter. If the value is not an array, its settings will be
- *   considered omitted.
- *
- *   ```js
- *   {
- *     adapter: [
- *       // Must be a class that extends `Fortune.Adapter`, or a function
- *       // that accepts the Adapter class and returns a subclass. Required.
- *       Adapter => { ... },
- *
- *       // An options object that is specific to the adapter. Optional.
- *       { ... }
- *     ]
- *   }
- *   ```
- *
- * - `hooks`: keyed by type name, valued by an array containing an `input`
- *   and/or `output` function at indices `0` and `1` respectively.
- *
- *   A hook function takes at least two arguments, the internal `context`
- *   object and a single `record`. A special case is the `update` argument for
- *   the `update` method.
- *
- *   There are only two kinds of hooks, before a record is written (input),
- *   and after a record is read (output), both are optional. If an error occurs
- *   within a hook function, it will be forwarded to the response. Use typed
- *   errors to provide the appropriate feedback.
- *
- *   For a create request, the input hook may return the second argument
- *   `record` either synchronously, or asynchronously as a Promise. The return
- *   value of a delete request is inconsequential, but it may return a value or
- *   a Promise. The `update` method accepts a `update` object as a third
- *   parameter, which may be returned synchronously or as a Promise.
- *
- *   An example hook to apply a timestamp on a record before creation, and
- *   displaying the timestamp in the server's locale:
- *
- *   ```js
- *   {
- *     recordType: [
- *       (context, record, update) => {
- *         switch (context.request.method) {
- *           case 'create':
- *             record.timestamp = new Date()
- *             return record
- *           case 'update': return update
- *           case 'delete': return null
- *         }
- *       },
- *       (context, record) => {
- *         record.timestamp = record.timestamp.toLocaleString()
- *         return record
- *       }
- *     ]
- *   }
- *   ```
- *
- *   Requests to update a record will **NOT** have the updates already applied
- *   to the record.
- *
- *   Another feature of the input hook is that it will have access to a
- *   temporary field `context.transaction`. This is useful for ensuring that
- *   bulk write operations are all or nothing. Each request is treated as a
- *   single transaction.
- *
- * - `documentation`: an object mapping names to descriptions. Note that there
- *   is only one namepspace, so field names can only have one description.
- *   This is optional, but useful for the HTML serializer, which also emits
- *   this information as micro-data.
- *
- *   ```js
- *   {
- *     documentation: {
- *       recordType: 'Description of a type.',
- *       fieldName: 'Description of a field.',
- *       anotherFieldName: {
- *         en: 'Two letter language code indicates localized description.'
- *       }
- *     }
- *   }
- *   ```
- *
- * - `settings`: internal settings to configure.
- *
- *   ```js
- *   {
- *     settings: {
- *       // Whether or not to enforce referential integrity. Default: `true`
- *       // for server, `false` for browser.
- *       enforceLinks: true,
- *
- *       // Name of the application used for display purposes.
- *       name: 'My Awesome Application',
- *
- *       // Description of the application used for display purposes.
- *       description: 'media type "application/vnd.micro+json"'
- *     }
- *   }
- *   ```
- *
- * The return value of the constructor is the instance itself.
- *
- * @param {Object} [recordTypes]
- * @param {Object} [options]
- * @return {Fortune}
- */
-Fortune.prototype.constructor = function Fortune (recordTypes, options) {
-  var self = this
-  var plainObject = {}
-  var message = common.message.copy()
-  var adapter, method, stack, flows, type, hooks, i, j
-
-  if (recordTypes === void 0) recordTypes = {}
-  if (options === void 0) options = {}
-
-  if (!('adapter' in options)) options.adapter = [ memoryAdapter(Adapter) ]
-  if (!('settings' in options)) options.settings = {}
-  if (!('hooks' in options)) options.hooks = {}
-  if (!('enforceLinks' in options.settings))
-    options.settings.enforceLinks = true
-
-  // Bind middleware methods to instance.
-  flows = {}
-  for (method in methods) {
-    stack = [ middlewares[method], middlewares.include, middlewares.end ]
-
-    for (i = 0, j = stack.length; i < j; i++)
-      stack[i] = bindMiddleware(self, stack[i])
-
-    flows[methods[method]] = stack
-  }
-
-  hooks = options.hooks
-
-  // Validate hooks.
-  for (type in hooks) {
-    if (!recordTypes.hasOwnProperty(type)) throw new Error(
-      'Attempted to define hook on "' + type + '" type ' +
-      'which does not exist.')
-    if (!Array.isArray(hooks[type]))
-      throw new TypeError('Hook value for "' + type + '" type ' +
-        'must be an array.')
-  }
-
-  // Validate record types.
-  for (type in recordTypes) {
-    if (type in plainObject)
-      throw new Error('Can not define type name "' + type +
-        '" which is in Object.prototype.')
-
-    validate(recordTypes[type])
-    if (!hooks.hasOwnProperty(type)) hooks[type] = []
-  }
-
-  /*!
-   * Adapter singleton that is coupled to the Fortune instance.
-   *
-   * @type {Adapter}
-   */
-  adapter = new AdapterSingleton({
-    adapter: options.adapter,
-    recordTypes: recordTypes,
-    hooks: hooks,
-    message: message
-  })
-
-  // Internal properties.
-  Object.defineProperties(self, {
-    // 0 = not started, 1 = started, 2 = done.
-    connectionStatus: { value: 0, writable: true },
-
-    // Configuration settings.
-    options: { value: options },
-    hooks: { value: hooks },
-    recordTypes: { value: recordTypes, enumerable: true },
-    message: { value: message, enumerable: true },
-
-    // Singleton instances.
-    adapter: { value: adapter, enumerable: true, configurable: true },
-
-    // Dispatch.
-    flows: { value: flows }
-  })
-}
-
-
-/**
- * This is the primary method for initiating a request. The options object
- * may contain the following keys:
- *
- * - `method`: The method is a either a function or a constant, which is keyed
- *   under `Fortune.common.methods` and may be one of `find`, `create`,
- *   `update`, or `delete`. Default: `find`.
- *
- * - `type`: Name of a type. **Required**.
- *
- * - `ids`: An array of IDs. Used for `find` and `delete` methods only. This is
- *   optional for the `find` method.
- *
- * - `include`: A 3-dimensional array specifying links to include. The first
- *   dimension is a list, the second dimension is depth, and the third
- *   dimension is an optional tuple with field and query options. For example:
- *   `[['comments'], ['comments', ['author', { ... }]]]`.
- *
- * - `options`: Exactly the same as the [`find` method](#adapter-find)
- *   options in the adapter. These options do not apply on methods other than
- *   `find`, and do not affect the records returned from `include`. Optional.
- *
- * - `meta`: Meta-information object of the request. Optional.
- *
- * - `payload`: Payload of the request. **Required** for `create` and `update`
- *   methods only, and must be an array of objects. The objects must be the
- *   records to create, or update objects as expected by the Adapter.
- *
- * - `transaction`: if an existing transaction should be re-used, this may
- *   optionally be passed in. This must be ended manually.
- *
- * The response object may contain the following keys:
- *
- * - `meta`: Meta-info of the response.
- *
- * - `payload`: An object containing the following keys:
- *   - `records`: An array of records returned.
- *   - `count`: Total number of records without options applied (only for
- *     responses to the `find` method).
- *   - `include`: An object keyed by type, valued by arrays of included
- *     records.
- *
- * The resolved response object should always be an instance of a response
- * type.
- *
- * @param {Object} options
- * @return {Promise}
- */
-Fortune.prototype.request = function (options) {
-  var self = this
-  var connectionStatus = self.connectionStatus
-  var Promise = promise.Promise
-
-  if (connectionStatus === 0)
-    return self.connect()
-      .then(function () { return dispatch.call(self, options) })
-
-  else if (connectionStatus === 1)
-    return new Promise(function (resolve, reject) {
-      // Wait for changes to connection status.
-      self.once(events.failure, function () {
-        reject(new Error('Connection failed.'))
-      })
-      self.once(events.connect, function () {
-        resolve(dispatch.call(self, options))
-      })
-    })
-
-  return dispatch.call(self, options)
-}
-
-
-/**
- * The `find` method retrieves record by type given IDs, querying options,
- * or both. This is a convenience method that wraps around the `request`
- * method, see the `request` method for documentation on its arguments.
- *
- * @param {String} type
- * @param {*|*[]} [ids]
- * @param {Object} [options]
- * @param {Array[]} [include]
- * @param {Object} [meta]
- * @return {Promise}
- */
-Fortune.prototype.find = function (type, ids, options, include, meta) {
-  var obj = { method: methods.find, type: type }
-
-  if (ids) obj.ids = Array.isArray(ids) ? ids : [ ids ]
-  if (options) obj.options = options
-  if (include) obj.include = include
-  if (meta) obj.meta = meta
-
-  return this.request(obj)
-}
-
-
-/**
- * The `create` method creates records by type given records to create. This
- * is a convenience method that wraps around the `request` method, see the
- * request `method` for documentation on its arguments.
- *
- * @param {String} type
- * @param {Object|Object[]} records
- * @param {Array[]} [include]
- * @param {Object} [meta]
- * @return {Promise}
- */
-Fortune.prototype.create = function (type, records, include, meta) {
-  var options = { method: methods.create, type: type,
-    payload: Array.isArray(records) ? records : [ records ] }
-
-  if (include) options.include = include
-  if (meta) options.meta = meta
-
-  return this.request(options)
-}
-
-
-/**
- * The `update` method updates records by type given update objects. See the
- * [Adapter.update](#adapter-update) method for the format of the update
- * objects. This is a convenience method that wraps around the `request`
- * method, see the `request` method for documentation on its arguments.
- *
- * @param {String} type
- * @param {Object|Object[]} updates
- * @param {Array[]} [include]
- * @param {Object} [meta]
- * @return {Promise}
- */
-Fortune.prototype.update = function (type, updates, include, meta) {
-  var options = { method: methods.update, type: type,
-    payload: Array.isArray(updates) ? updates : [ updates ] }
-
-  if (include) options.include = include
-  if (meta) options.meta = meta
-
-  return this.request(options)
-}
-
-
-/**
- * The `delete` method deletes records by type given IDs (optional). This is a
- * convenience method that wraps around the `request` method, see the `request`
- * method for documentation on its arguments.
- *
- * @param {String} type
- * @param {*|*[]} [ids]
- * @param {Array[]} [include]
- * @param {Object} [meta]
- * @return {Promise}
- */
-Fortune.prototype.delete = function (type, ids, include, meta) {
-  var options = { method: methods.delete, type: type }
-
-  if (ids) options.ids = Array.isArray(ids) ? ids : [ ids ]
-  if (include) options.include = include
-  if (meta) options.meta = meta
-
-  return this.request(options)
-}
-
-
-/**
- * This method does not need to be called manually, it is automatically called
- * upon the first request if it is not connected already. However, it may be
- * useful if manually reconnect is needed. The resolved value is the instance
- * itself.
- *
- * @return {Promise}
- */
-Fortune.prototype.connect = function () {
-  var self = this
-  var Promise = promise.Promise
-
-  if (self.connectionStatus === 1)
-    return Promise.reject(new Error('Connection is in progress.'))
-
-  else if (self.connectionStatus === 2)
-    return Promise.reject(new Error('Connection is already done.'))
-
-  self.connectionStatus = 1
-
-  return new Promise(function (resolve, reject) {
-    Object.defineProperty(self, 'denormalizedFields', {
-      value: ensureTypes(self.recordTypes),
-      writable: true,
-      configurable: true
-    })
-
-    self.adapter.connect().then(function () {
-      self.connectionStatus = 2
-      self.emit(events.connect)
-      return resolve(self)
-    }, function (error) {
-      self.connectionStatus = 0
-      self.emit(events.failure)
-      return reject(error)
-    })
-  })
-}
-
-
-/**
- * Close adapter connection, and reset connection state. The resolved value is
- * the instance itself.
- *
- * @return {Promise}
- */
-Fortune.prototype.disconnect = function () {
-  var self = this
-  var Promise = promise.Promise
-
-  if (self.connectionStatus !== 2)
-    return Promise.reject(new Error('Instance has not been connected.'))
-
-  self.connectionStatus = 1
-
-  return new Promise(function (resolve, reject) {
-    return self.adapter.disconnect().then(function () {
-      self.connectionStatus = 0
-      self.emit(events.disconnect)
-      return resolve(self)
-    }, function (error) {
-      self.connectionStatus = 2
-      self.emit(events.failure)
-      return reject(error)
-    })
-  })
-}
-
-
-// Useful for dependency injection. All instances of Fortune have the same
-// common internal dependencies.
-Fortune.prototype.common = common
-
-
-// Assign useful static properties to the default export.
-assign(Fortune, {
-  Adapter: Adapter,
-  adapters: {
-    memory: memoryAdapter(Adapter)
-  },
-  errors: common.errors,
-  message: common.message,
-  methods: methods,
-  events: events
-})
-
-
-// Set the `Promise` property.
-Object.defineProperty(Fortune, 'Promise', {
-  enumerable: true,
-  get: function () {
-    return promise.Promise
-  },
-  set: function (value) {
-    promise.Promise = value
-  }
-})
-
-
-// Internal helper function.
-function bindMiddleware (scope, method) {
-  return function (x) {
-    return method.call(scope, x)
-  }
-}
-
-
-module.exports = Fortune
-
-},{"./adapter":4,"./adapter/adapters/memory":3,"./adapter/singleton":5,"./common":23,"./common/promise":27,"./dispatch":36,"./record_type/ensure_types":43,"./record_type/validate":44,"event-lite":48}],42:[function(require,module,exports){
-(function (Buffer){
-'use strict'
-
-var message = require('../common/message')
-var find = require('../common/array/find')
-
-var errors = require('../common/errors')
-var BadRequestError = errors.BadRequestError
-
-var keys = require('../common/keys')
-var primaryKey = keys.primary
-var typeKey = keys.type
-var linkKey = keys.link
-var isArrayKey = keys.isArray
-
-
-// Check input values.
-var checkInput = [
-  [ String, function (value) {
-    return typeof value === 'string'
-  } ],
-  [ Number, function (value) {
-    return typeof value === 'number'
-  } ],
-  [ Boolean, function (value) {
-    return typeof value === 'boolean'
-  } ],
-  [ Date, function (value) {
-    return value && typeof value.getTime === 'function' &&
-      !Number.isNaN(value.getTime())
-  } ],
-  [ Object, function (value) {
-    return value !== null && typeof value === 'object'
-  } ],
-  [ Buffer, function (value) {
-    return Buffer.isBuffer(value)
-  } ]
-]
-
-
-/**
- * Throw errors for mismatched types on a record.
- *
- * @param {String} type
- * @param {Object} record
- * @param {Object} fields
- * @param {Object} meta
- * @return {Object}
- */
-module.exports = function enforce (type, record, fields, meta) {
-  var i, j, key, value, fieldDefinition, language
-
-  if (!meta) meta = {}
-  language = meta.language
-
-  for (key in record) {
-    fieldDefinition = fields[key]
-
-    if (!fieldDefinition) {
-      if (key !== primaryKey) delete record[key]
-      continue
-    }
-
-    value = record[key]
-
-    if (fieldDefinition[typeKey]) {
-      if (fieldDefinition[isArrayKey]) {
-        // If the field is defined as an array but the value is not,
-        // then throw an error.
-        if (!Array.isArray(value))
-          throw new BadRequestError(message('EnforceArrayType', language, {
-            key: key, type: fieldDefinition[typeKey].name
-          }))
-
-        for (i = 0, j = value.length; i < j; i++)
-          checkValue(fieldDefinition, key, value[i], meta)
-      }
-      else checkValue(fieldDefinition, key, value, meta)
-
-      continue
-    }
-
-    if (fieldDefinition[linkKey]) {
-      if (fieldDefinition[isArrayKey]) {
-        if (!Array.isArray(value))
-          throw new BadRequestError(
-            message('EnforceArray', language, { key: key }))
-
-        if (type === fieldDefinition[linkKey] &&
-          find(value, matchId(record[primaryKey])))
-          throw new BadRequestError(
-            message('EnforceSameID', language, { key: key }))
-
-        continue
-      }
-
-      if (Array.isArray(value))
-        throw new BadRequestError(
-          message('EnforceSingular', language, { key: key }))
-
-      if (type === fieldDefinition[linkKey] && record[primaryKey] === value)
-        throw new BadRequestError(
-          message('EnforceSameID', language, { key: key }))
-
-      continue
-    }
-  }
-
-  return record
-}
-
-
-function checkValue (field, key, value, meta) {
-  var language = meta.language
-  var check
-  var type = field[typeKey]
-
-  // Skip `null` case.
-  if (value === null) return
-
-  check = find(checkInput, function (pair) {
-    return pair[0] === type
-  })
-  if (check) check = check[1]
-  else check = type
-
-  // Fields may be nullable, but if they're defined, then they must be defined
-  // properly.
-  if (!check(value)) throw new BadRequestError(
-    message(field[isArrayKey] ? 'EnforceValueArray' : 'EnforceValue',
-      language, { key: key, type: type.displayName || type.name }))
-}
-
-
-function matchId (a) {
-  return function (b) {
-    return a === b
-  }
-}
-
-}).call(this,require("buffer").Buffer)
-},{"../common/array/find":8,"../common/errors":20,"../common/keys":24,"../common/message":25,"buffer":46}],43:[function(require,module,exports){
-'use strict'
-
-var keys = require('../common/keys')
-var linkKey = keys.link
-var inverseKey = keys.inverse
-var isArrayKey = keys.isArray
-var denormalizedInverseKey = keys.denormalizedInverse
-
-
-// Generate denormalized inverse field name.
-var denormalizedPrefix = '__'
-var denormalizedDelimiter = '_'
-var denormalizedPostfix = '_inverse'
-
-
-/**
- * Analyze the `types` object to see if `link` and `inverse` values are
- * valid. Also assign denormalized inverse fields.
- *
- * @param {Object} types
- * @return {Object}
- */
-module.exports = function ensureTypes (types) {
-  var denormalizedFields = {}
-  var type, field, definition, linkedFields,
-    denormalizedField, denormalizedDefinition
-
-  for (type in types)
-    for (field in types[type]) {
-      definition = types[type][field]
-
-      if (!(linkKey in definition)) continue
-
-      if (!types.hasOwnProperty(definition[linkKey]))
-        throw new Error('The value for "' + linkKey + '" on "' + field +
-          '" in type "' + type +
-          '" is invalid, the record type does not exist.')
-
-      linkedFields = types[definition[linkKey]]
-
-      if (inverseKey in definition) {
-        if (!linkedFields.hasOwnProperty(definition[inverseKey]))
-          throw new Error('The value for "' + inverseKey + '" on "' + field +
-            '" in type "' + type + '" is invalid, the field does not exist.')
-
-        if (linkedFields[definition[inverseKey]][inverseKey] !== field)
-          throw new Error('The value for "' + inverseKey + '" on "' + field +
-            '" in type "' + type +
-            '" is invalid, the inversely related field must define its ' +
-            'inverse as "' + field + '".')
-
-        if (linkedFields[definition[inverseKey]][linkKey] !== type)
-          throw new Error('The value for "' + linkKey + '" on "' + field +
-            '" in type "' + type +
-            '" is invalid, the inversely related field must define its link ' +
-            'as "' + type + '".')
-
-        continue
-      }
-
-      // Need to assign denormalized inverse. The denormalized inverse field
-      // is basically an automatically assigned inverse field that should
-      // not be visible to the client, but exists in the data store.
-      denormalizedField = denormalizedPrefix + type +
-        denormalizedDelimiter + field + denormalizedPostfix
-
-      denormalizedFields[denormalizedField] = true
-
-      Object.defineProperty(definition, inverseKey, {
-        value: denormalizedField
-      })
-
-      denormalizedDefinition = {}
-      denormalizedDefinition[linkKey] = type
-      denormalizedDefinition[inverseKey] = field
-      denormalizedDefinition[isArrayKey] = true
-      denormalizedDefinition[denormalizedInverseKey] = true
-
-      Object.defineProperty(linkedFields, denormalizedField, {
-        value: denormalizedDefinition
-      })
-    }
-
-  return denormalizedFields
-}
-
-},{"../common/keys":24}],44:[function(require,module,exports){
-(function (Buffer){
-'use strict'
-
-var find = require('../common/array/find')
-var map = require('../common/array/map')
-
-var keys = require('../common/keys')
-var primaryKey = keys.primary
-var typeKey = keys.type
-var linkKey = keys.link
-var inverseKey = keys.inverse
-var isArrayKey = keys.isArray
-
-var plainObject = {}
-var nativeTypes = [ String, Number, Boolean, Date, Object, Buffer ]
-var stringifiedTypes = map(nativeTypes, function (nativeType) {
-  return nativeType.name.toLowerCase()
-})
-
-
-/**
- * Given a hash of field definitions, validate that the definitions are in the
- * correct format.
- *
- * @param {Object} fields
- * @return {Object}
- */
-module.exports = function validate (fields) {
-  var key
-
-  if (typeof fields !== 'object')
-    throw new TypeError('Type definition must be an object.')
-
-  for (key in fields) validateField(fields, key)
-
-  return fields
-}
-
-
-/**
- * Parse a field definition.
- *
- * @param {Object} fields
- * @param {String} key
- */
-function validateField (fields, key) {
-  var value = fields[key] = castShorthand(fields[key])
-
-  if (typeof value !== 'object' || value.constructor !== Object)
-    throw new TypeError('The definition of "' + key + '" must be an object.')
-
-  if (key === primaryKey)
-    throw new Error('Can not define primary key "' + primaryKey + '".')
-
-  if (key in plainObject)
-    throw new Error('Can not define field name "' + key +
-      '" which is in Object.prototype.')
-
-  if (!value[typeKey] && !value[linkKey])
-    throw new Error('The definition of "' + key + '" must contain either ' +
-      'the "' + typeKey + '" or "' + linkKey + '" property.')
-
-  if (value[typeKey] && value[linkKey])
-    throw new Error('Can not define both "' + typeKey + '" and "' + linkKey +
-      '" on "' + key + '".')
-
-  if (value[typeKey]) {
-    if (typeof value[typeKey] === 'string')
-      value[typeKey] = nativeTypes[
-        stringifiedTypes.indexOf(value[typeKey].toLowerCase())]
-
-    if (typeof value[typeKey] !== 'function')
-      throw new Error('The "' + typeKey + '" on "' + key +
-        '" must be a function.')
-
-    if (!find(nativeTypes, function (type) {
-      return type === value[typeKey].prototype.constructor
-    }))
-      throw new Error('The "' + typeKey + '" on "' + key + '" must inherit ' +
-        'from a valid native type.')
-
-    if (value[inverseKey])
-      throw new Error('The field "' + inverseKey + '" may not be defined ' +
-        'on "' + key + '".')
-  }
-
-  if (value[linkKey]) {
-    if (typeof value[linkKey] !== 'string')
-      throw new TypeError('The "' + linkKey + '" on "' + key +
-        '" must be a string.')
-
-    if (value[inverseKey] && typeof value[inverseKey] !== 'string')
-      throw new TypeError('The "' + inverseKey + '" on "' + key + '" ' +
-        'must be a string.')
-  }
-
-  if (value[isArrayKey] && typeof value[isArrayKey] !== 'boolean')
-    throw new TypeError('The key "' + isArrayKey + '" on "' + key + '" ' +
-        'must be a boolean.')
-}
-
-
-/**
- * Cast shorthand definition to standard definition.
- *
- * @param {*} value
- * @return {Object}
- */
-function castShorthand (value) {
-  var obj
-
-  if (typeof value === 'string') obj = { link: value }
-  else if (typeof value === 'function') obj = { type: value }
-  else if (Array.isArray(value)) {
-    obj = {}
-
-    if (value[1]) obj.inverse = value[1]
-    else obj.isArray = true
-
-    // Extract type or link.
-    if (Array.isArray(value[0])) {
-      obj.isArray = true
-      value = value[0][0]
-    }
-    else value = value[0]
-
-    if (typeof value === 'string') obj.link = value
-    else if (typeof value === 'function') obj.type = value
-  }
-  else return value
-
-  return obj
-}
-
-}).call(this,require("buffer").Buffer)
-},{"../common/array/find":8,"../common/array/map":10,"../common/keys":24,"buffer":46}],45:[function(require,module,exports){
+},{"../common/errors":20,"../common/keys":24,"../common/message":25}],45:[function(require,module,exports){
 'use strict'
 
 exports.byteLength = byteLength
@@ -4035,68 +4035,102 @@ for (var i = 0, len = code.length; i < len; ++i) {
   revLookup[code.charCodeAt(i)] = i
 }
 
+// Support decoding URL-safe base64 strings, as Node.js does.
+// See: https://en.wikipedia.org/wiki/Base64#URL_applications
 revLookup['-'.charCodeAt(0)] = 62
 revLookup['_'.charCodeAt(0)] = 63
 
-function placeHoldersCount (b64) {
+function getLens (b64) {
   var len = b64.length
+
   if (len % 4 > 0) {
     throw new Error('Invalid string. Length must be a multiple of 4')
   }
 
-  // the number of equal signs (place holders)
-  // if there are two placeholders, than the two characters before it
-  // represent one byte
-  // if there is only one, then the three characters before it represent 2 bytes
-  // this is just a cheap hack to not do indexOf twice
-  return b64[len - 2] === '=' ? 2 : b64[len - 1] === '=' ? 1 : 0
+  // Trim off extra bytes after placeholder bytes are found
+  // See: https://github.com/beatgammit/base64-js/issues/42
+  var validLen = b64.indexOf('=')
+  if (validLen === -1) validLen = len
+
+  var placeHoldersLen = validLen === len
+    ? 0
+    : 4 - (validLen % 4)
+
+  return [validLen, placeHoldersLen]
 }
 
+// base64 is 4/3 + up to two characters of the original data
 function byteLength (b64) {
-  // base64 is 4/3 + up to two characters of the original data
-  return b64.length * 3 / 4 - placeHoldersCount(b64)
+  var lens = getLens(b64)
+  var validLen = lens[0]
+  var placeHoldersLen = lens[1]
+  return ((validLen + placeHoldersLen) * 3 / 4) - placeHoldersLen
+}
+
+function _byteLength (b64, validLen, placeHoldersLen) {
+  return ((validLen + placeHoldersLen) * 3 / 4) - placeHoldersLen
 }
 
 function toByteArray (b64) {
-  var i, j, l, tmp, placeHolders, arr
-  var len = b64.length
-  placeHolders = placeHoldersCount(b64)
+  var tmp
+  var lens = getLens(b64)
+  var validLen = lens[0]
+  var placeHoldersLen = lens[1]
 
-  arr = new Arr(len * 3 / 4 - placeHolders)
+  var arr = new Arr(_byteLength(b64, validLen, placeHoldersLen))
+
+  var curByte = 0
 
   // if there are placeholders, only get up to the last complete 4 chars
-  l = placeHolders > 0 ? len - 4 : len
+  var len = placeHoldersLen > 0
+    ? validLen - 4
+    : validLen
 
-  var L = 0
-
-  for (i = 0, j = 0; i < l; i += 4, j += 3) {
-    tmp = (revLookup[b64.charCodeAt(i)] << 18) | (revLookup[b64.charCodeAt(i + 1)] << 12) | (revLookup[b64.charCodeAt(i + 2)] << 6) | revLookup[b64.charCodeAt(i + 3)]
-    arr[L++] = (tmp >> 16) & 0xFF
-    arr[L++] = (tmp >> 8) & 0xFF
-    arr[L++] = tmp & 0xFF
+  for (var i = 0; i < len; i += 4) {
+    tmp =
+      (revLookup[b64.charCodeAt(i)] << 18) |
+      (revLookup[b64.charCodeAt(i + 1)] << 12) |
+      (revLookup[b64.charCodeAt(i + 2)] << 6) |
+      revLookup[b64.charCodeAt(i + 3)]
+    arr[curByte++] = (tmp >> 16) & 0xFF
+    arr[curByte++] = (tmp >> 8) & 0xFF
+    arr[curByte++] = tmp & 0xFF
   }
 
-  if (placeHolders === 2) {
-    tmp = (revLookup[b64.charCodeAt(i)] << 2) | (revLookup[b64.charCodeAt(i + 1)] >> 4)
-    arr[L++] = tmp & 0xFF
-  } else if (placeHolders === 1) {
-    tmp = (revLookup[b64.charCodeAt(i)] << 10) | (revLookup[b64.charCodeAt(i + 1)] << 4) | (revLookup[b64.charCodeAt(i + 2)] >> 2)
-    arr[L++] = (tmp >> 8) & 0xFF
-    arr[L++] = tmp & 0xFF
+  if (placeHoldersLen === 2) {
+    tmp =
+      (revLookup[b64.charCodeAt(i)] << 2) |
+      (revLookup[b64.charCodeAt(i + 1)] >> 4)
+    arr[curByte++] = tmp & 0xFF
+  }
+
+  if (placeHoldersLen === 1) {
+    tmp =
+      (revLookup[b64.charCodeAt(i)] << 10) |
+      (revLookup[b64.charCodeAt(i + 1)] << 4) |
+      (revLookup[b64.charCodeAt(i + 2)] >> 2)
+    arr[curByte++] = (tmp >> 8) & 0xFF
+    arr[curByte++] = tmp & 0xFF
   }
 
   return arr
 }
 
 function tripletToBase64 (num) {
-  return lookup[num >> 18 & 0x3F] + lookup[num >> 12 & 0x3F] + lookup[num >> 6 & 0x3F] + lookup[num & 0x3F]
+  return lookup[num >> 18 & 0x3F] +
+    lookup[num >> 12 & 0x3F] +
+    lookup[num >> 6 & 0x3F] +
+    lookup[num & 0x3F]
 }
 
 function encodeChunk (uint8, start, end) {
   var tmp
   var output = []
   for (var i = start; i < end; i += 3) {
-    tmp = (uint8[i] << 16) + (uint8[i + 1] << 8) + (uint8[i + 2])
+    tmp =
+      ((uint8[i] << 16) & 0xFF0000) +
+      ((uint8[i + 1] << 8) & 0xFF00) +
+      (uint8[i + 2] & 0xFF)
     output.push(tripletToBase64(tmp))
   }
   return output.join('')
@@ -4106,30 +4140,33 @@ function fromByteArray (uint8) {
   var tmp
   var len = uint8.length
   var extraBytes = len % 3 // if we have 1 byte left, pad 2 bytes
-  var output = ''
   var parts = []
   var maxChunkLength = 16383 // must be multiple of 3
 
   // go through the array every three bytes, we'll deal with trailing stuff later
   for (var i = 0, len2 = len - extraBytes; i < len2; i += maxChunkLength) {
-    parts.push(encodeChunk(uint8, i, (i + maxChunkLength) > len2 ? len2 : (i + maxChunkLength)))
+    parts.push(encodeChunk(
+      uint8, i, (i + maxChunkLength) > len2 ? len2 : (i + maxChunkLength)
+    ))
   }
 
   // pad the end with zeros, but make sure to not forget the extra bytes
   if (extraBytes === 1) {
     tmp = uint8[len - 1]
-    output += lookup[tmp >> 2]
-    output += lookup[(tmp << 4) & 0x3F]
-    output += '=='
+    parts.push(
+      lookup[tmp >> 2] +
+      lookup[(tmp << 4) & 0x3F] +
+      '=='
+    )
   } else if (extraBytes === 2) {
-    tmp = (uint8[len - 2] << 8) + (uint8[len - 1])
-    output += lookup[tmp >> 10]
-    output += lookup[(tmp >> 4) & 0x3F]
-    output += lookup[(tmp << 2) & 0x3F]
-    output += '='
+    tmp = (uint8[len - 2] << 8) + uint8[len - 1]
+    parts.push(
+      lookup[tmp >> 10] +
+      lookup[(tmp >> 4) & 0x3F] +
+      lookup[(tmp << 2) & 0x3F] +
+      '='
+    )
   }
-
-  parts.push(output)
 
   return parts.join('')
 }
@@ -4138,7 +4175,7 @@ function fromByteArray (uint8) {
 /*!
  * The buffer module from node.js, for the browser.
  *
- * @author   Feross Aboukhadijeh <feross@feross.org> <http://feross.org>
+ * @author   Feross Aboukhadijeh <https://feross.org>
  * @license  MIT
  */
 /* eslint-disable no-proto */
@@ -4189,6 +4226,24 @@ function typedArraySupport () {
     return false
   }
 }
+
+Object.defineProperty(Buffer.prototype, 'parent', {
+  get: function () {
+    if (!(this instanceof Buffer)) {
+      return undefined
+    }
+    return this.buffer
+  }
+})
+
+Object.defineProperty(Buffer.prototype, 'offset', {
+  get: function () {
+    if (!(this instanceof Buffer)) {
+      return undefined
+    }
+    return this.byteOffset
+  }
+})
 
 function createBuffer (length) {
   if (length > K_MAX_LENGTH) {
@@ -4241,7 +4296,7 @@ function from (value, encodingOrOffset, length) {
     throw new TypeError('"value" argument must not be a number')
   }
 
-  if (value instanceof ArrayBuffer) {
+  if (isArrayBuffer(value) || (value && isArrayBuffer(value.buffer))) {
     return fromArrayBuffer(value, encodingOrOffset, length)
   }
 
@@ -4271,7 +4326,7 @@ Buffer.__proto__ = Uint8Array
 
 function assertSize (size) {
   if (typeof size !== 'number') {
-    throw new TypeError('"size" argument must be a number')
+    throw new TypeError('"size" argument must be of type number')
   } else if (size < 0) {
     throw new RangeError('"size" argument must not be negative')
   }
@@ -4325,7 +4380,7 @@ function fromString (string, encoding) {
   }
 
   if (!Buffer.isEncoding(encoding)) {
-    throw new TypeError('"encoding" must be a valid string encoding')
+    throw new TypeError('Unknown encoding: ' + encoding)
   }
 
   var length = byteLength(string, encoding) | 0
@@ -4354,11 +4409,11 @@ function fromArrayLike (array) {
 
 function fromArrayBuffer (array, byteOffset, length) {
   if (byteOffset < 0 || array.byteLength < byteOffset) {
-    throw new RangeError('\'offset\' is out of bounds')
+    throw new RangeError('"offset" is outside of buffer bounds')
   }
 
   if (array.byteLength < byteOffset + (length || 0)) {
-    throw new RangeError('\'length\' is out of bounds')
+    throw new RangeError('"length" is outside of buffer bounds')
   }
 
   var buf
@@ -4389,7 +4444,7 @@ function fromObject (obj) {
   }
 
   if (obj) {
-    if (isArrayBufferView(obj) || 'length' in obj) {
+    if (ArrayBuffer.isView(obj) || 'length' in obj) {
       if (typeof obj.length !== 'number' || numberIsNaN(obj.length)) {
         return createBuffer(0)
       }
@@ -4401,7 +4456,7 @@ function fromObject (obj) {
     }
   }
 
-  throw new TypeError('First argument must be a string, Buffer, ArrayBuffer, Array, or array-like object.')
+  throw new TypeError('The first argument must be one of type string, Buffer, ArrayBuffer, Array, or Array-like Object.')
 }
 
 function checked (length) {
@@ -4488,6 +4543,9 @@ Buffer.concat = function concat (list, length) {
   var pos = 0
   for (i = 0; i < list.length; ++i) {
     var buf = list[i]
+    if (ArrayBuffer.isView(buf)) {
+      buf = Buffer.from(buf)
+    }
     if (!Buffer.isBuffer(buf)) {
       throw new TypeError('"list" argument must be an Array of Buffers')
     }
@@ -4501,7 +4559,7 @@ function byteLength (string, encoding) {
   if (Buffer.isBuffer(string)) {
     return string.length
   }
-  if (isArrayBufferView(string) || string instanceof ArrayBuffer) {
+  if (ArrayBuffer.isView(string) || isArrayBuffer(string)) {
     return string.byteLength
   }
   if (typeof string !== 'string') {
@@ -4668,6 +4726,8 @@ Buffer.prototype.toString = function toString () {
   if (arguments.length === 0) return utf8Slice(this, 0, length)
   return slowToString.apply(this, arguments)
 }
+
+Buffer.prototype.toLocaleString = Buffer.prototype.toString
 
 Buffer.prototype.equals = function equals (b) {
   if (!Buffer.isBuffer(b)) throw new TypeError('Argument must be a Buffer')
@@ -4889,9 +4949,7 @@ function hexWrite (buf, string, offset, length) {
     }
   }
 
-  // must be an even number of digits
   var strLen = string.length
-  if (strLen % 2 !== 0) throw new TypeError('Invalid hex string')
 
   if (length > strLen / 2) {
     length = strLen / 2
@@ -5584,6 +5642,7 @@ Buffer.prototype.writeDoubleBE = function writeDoubleBE (value, offset, noAssert
 
 // copy(targetBuffer, targetStart=0, sourceStart=0, sourceEnd=buffer.length)
 Buffer.prototype.copy = function copy (target, targetStart, start, end) {
+  if (!Buffer.isBuffer(target)) throw new TypeError('argument should be a Buffer')
   if (!start) start = 0
   if (!end && end !== 0) end = this.length
   if (targetStart >= target.length) targetStart = target.length
@@ -5598,7 +5657,7 @@ Buffer.prototype.copy = function copy (target, targetStart, start, end) {
   if (targetStart < 0) {
     throw new RangeError('targetStart out of bounds')
   }
-  if (start < 0 || start >= this.length) throw new RangeError('sourceStart out of bounds')
+  if (start < 0 || start >= this.length) throw new RangeError('Index out of range')
   if (end < 0) throw new RangeError('sourceEnd out of bounds')
 
   // Are we oob?
@@ -5608,22 +5667,19 @@ Buffer.prototype.copy = function copy (target, targetStart, start, end) {
   }
 
   var len = end - start
-  var i
 
-  if (this === target && start < targetStart && targetStart < end) {
+  if (this === target && typeof Uint8Array.prototype.copyWithin === 'function') {
+    // Use built-in when available, missing from IE11
+    this.copyWithin(targetStart, start, end)
+  } else if (this === target && start < targetStart && targetStart < end) {
     // descending copy from end
-    for (i = len - 1; i >= 0; --i) {
-      target[i + targetStart] = this[i + start]
-    }
-  } else if (len < 1000) {
-    // ascending copy from start
-    for (i = 0; i < len; ++i) {
+    for (var i = len - 1; i >= 0; --i) {
       target[i + targetStart] = this[i + start]
     }
   } else {
     Uint8Array.prototype.set.call(
       target,
-      this.subarray(start, start + len),
+      this.subarray(start, end),
       targetStart
     )
   }
@@ -5646,17 +5702,19 @@ Buffer.prototype.fill = function fill (val, start, end, encoding) {
       encoding = end
       end = this.length
     }
-    if (val.length === 1) {
-      var code = val.charCodeAt(0)
-      if (code < 256) {
-        val = code
-      }
-    }
     if (encoding !== undefined && typeof encoding !== 'string') {
       throw new TypeError('encoding must be a string')
     }
     if (typeof encoding === 'string' && !Buffer.isEncoding(encoding)) {
       throw new TypeError('Unknown encoding: ' + encoding)
+    }
+    if (val.length === 1) {
+      var code = val.charCodeAt(0)
+      if ((encoding === 'utf8' && code < 128) ||
+          encoding === 'latin1') {
+        // Fast path: If `val` fits into a single byte, use that numeric value.
+        val = code
+      }
     }
   } else if (typeof val === 'number') {
     val = val & 255
@@ -5686,6 +5744,10 @@ Buffer.prototype.fill = function fill (val, start, end, encoding) {
       ? val
       : new Buffer(val, encoding)
     var len = bytes.length
+    if (len === 0) {
+      throw new TypeError('The value "' + val +
+        '" is invalid for argument "value"')
+    }
     for (i = 0; i < end - start; ++i) {
       this[i + start] = bytes[i % len]
     }
@@ -5700,6 +5762,8 @@ Buffer.prototype.fill = function fill (val, start, end, encoding) {
 var INVALID_BASE64_RE = /[^+/0-9A-Za-z-_]/g
 
 function base64clean (str) {
+  // Node takes equal signs as end of the Base64 encoding
+  str = str.split('=')[0]
   // Node strips out invalid characters like \n and \t from the string, base64-js does not
   str = str.trim().replace(INVALID_BASE64_RE, '')
   // Node converts strings with length < 2 to ''
@@ -5833,9 +5897,12 @@ function blitBuffer (src, dst, offset, length) {
   return i
 }
 
-// Node 0.10 supports `ArrayBuffer` but lacks `ArrayBuffer.isView`
-function isArrayBufferView (obj) {
-  return (typeof ArrayBuffer.isView === 'function') && ArrayBuffer.isView(obj)
+// ArrayBuffers from another context (i.e. an iframe) do not pass the `instanceof` check
+// but they should be treated as valid. See: https://github.com/feross/buffer/issues/166
+function isArrayBuffer (obj) {
+  return obj instanceof ArrayBuffer ||
+    (obj != null && obj.constructor != null && obj.constructor.name === 'ArrayBuffer' &&
+      typeof obj.byteLength === 'number')
 }
 
 function numberIsNaN (obj) {
@@ -6192,4 +6259,4 @@ function isSlowBuffer (obj) {
   return typeof obj.readFloatLE === 'function' && typeof obj.slice === 'function' && isBuffer(obj.slice(0, 0))
 }
 
-},{}]},{},[40]);
+},{}]},{},[30]);
