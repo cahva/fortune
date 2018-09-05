@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.4.5
+ * Version 5.4.6
  * MIT License
  * http://fortune.js.org
  */
@@ -3019,10 +3019,6 @@ module.exports = function (context) {
   var records = response.records
   var include = response.include
 
-  // Delete temporary keys.
-  delete response.records
-  delete response.include
-
   // Run hooks on primary type.
   return (records ? Promise.all(map(records, function (record) {
     return Promise.resolve(typeof hook[1] === 'function' ?
@@ -3068,6 +3064,10 @@ module.exports = function (context) {
     }) : Promise.resolve())
 
     .then(function () {
+      // Delete temporary keys, these should not be serialized.
+      delete response.records
+      delete response.include
+
       context.response.payload = {
         records: records
       }
