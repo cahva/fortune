@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.4.7
+ * Version 5.4.8
  * MIT License
  * http://fortune.js.org
  */
@@ -2841,7 +2841,7 @@ module.exports = function (context) {
               removeId(id,
                 getUpdate(
                   type, linked[field][inverseField], updates, idCache),
-                inverseField, linkedIsArray)
+                field, linkedIsArray)
           }
 
           // Unset from 2nd degree related records for many-to-one case.
@@ -3743,7 +3743,7 @@ module.exports = function (context) {
                   getUpdate(
                     type, linked[field][inverseField],
                     relatedUpdates, idCache),
-                  inverseField, linkedIsArray)
+                  field, linkedIsArray)
 
               // For unsetting, remove ID from related record.
               if (record[field] !== null &&
