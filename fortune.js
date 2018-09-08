@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.4.6
+ * Version 5.4.7
  * MIT License
  * http://fortune.js.org
  */
@@ -2685,6 +2685,7 @@ var updateHelpers = require('./update_helpers')
 var scrubDenormalizedUpdates = updateHelpers.scrubDenormalizedUpdates
 var getUpdate = updateHelpers.getUpdate
 var addId = updateHelpers.addId
+var removeId = updateHelpers.removeId
 
 var constants = require('../common/constants')
 var changeEvent = constants.change
@@ -2711,6 +2712,7 @@ module.exports = function (context) {
   var hooks = self.hooks
   var updates = {}
   var links = []
+  var recordsLinked = []
   var transaction, records, type, meta, hook, fields, language
 
   // Start a promise chain.
@@ -2759,6 +2761,11 @@ module.exports = function (context) {
 
         // Ensure referential integrity.
         return checkLinks.call(self, transaction, record, fields, links, meta)
+          .then(function (linked) {
+            // The created records should come back in the same order.
+            recordsLinked.push(linked)
+            return record
+          })
       }))
     })
 
@@ -2768,8 +2775,10 @@ module.exports = function (context) {
     })
 
     .then(function (createdRecords) {
-      var i, j, k, l, m, n, record, field, inverseField,
-        linkedType, linkedIsArray, linkedIds, id
+      var record, field, inverseField, fieldIsArray,
+        linked, linkedType, linkedIsArray, linkedIds, id,
+        partialRecord, partialRecords
+      var i, j, k, l, m, n, o, p
 
       // Update inversely linked records on created records.
       // Trying to batch updates to be as few as possible.
@@ -2790,6 +2799,7 @@ module.exports = function (context) {
       // Iterate over each record to generate updates object.
       for (i = 0, j = records.length; i < j; i++) {
         record = records[i]
+        linked = recordsLinked[i]
 
         // Each created record must have an ID.
         if (!(primaryKey in record))
@@ -2805,7 +2815,8 @@ module.exports = function (context) {
           linkedType = fields[field][linkKey]
           linkedIsArray =
           recordTypes[linkedType][inverseField][isArrayKey]
-          linkedIds = Array.isArray(record[field]) ?
+          fieldIsArray = fields[field][isArrayKey]
+          linkedIds = fieldIsArray ?
             record[field] : [ record[field] ]
 
           // Do some initialization.
@@ -2814,10 +2825,43 @@ module.exports = function (context) {
 
           for (m = 0, n = linkedIds.length; m < n; m++) {
             id = linkedIds[m]
+
+            // Set related field.
             if (id !== null)
               addId(record[primaryKey],
                 getUpdate(linkedType, id, updates, idCache),
                 inverseField, linkedIsArray)
+
+            // Unset 2nd degree related record for one-to-one case.
+            if (!fieldIsArray &&
+            linked.hasOwnProperty(field) &&
+            linked[field][inverseField] !== null &&
+            !linkedIsArray &&
+            linked[field][inverseField] !== record[primaryKey])
+              removeId(id,
+                getUpdate(
+                  type, linked[field][inverseField], updates, idCache),
+                inverseField, linkedIsArray)
+          }
+
+          // Unset from 2nd degree related records for many-to-one case.
+          if (fieldIsArray &&
+          linked.hasOwnProperty(field) && !linkedIsArray) {
+            partialRecords = Array.isArray(linked[field]) ?
+              linked[field] : [ linked[field] ]
+
+            for (o = 0, p = partialRecords.length; o < p; o++) {
+              partialRecord = partialRecords[o]
+
+              if (partialRecord[inverseField] === record[primaryKey])
+                continue
+
+              removeId(partialRecord[primaryKey],
+                getUpdate(
+                  type, partialRecord[inverseField],
+                  updates, idCache),
+                field, fieldIsArray)
+            }
           }
         }
       }
