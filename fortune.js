@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.4.8
+ * Version 5.5.0
  * MIT License
  * http://fortune.js.org
  */
@@ -284,7 +284,7 @@ function compare (fields, sort) {
 }
 
 }).call(this,require("buffer").Buffer)
-},{"../../common/array/find":8,"../../common/deep_equal":19,"../../common/errors":20,"../../common/generate_id":22,"../../common/keys":24,"../../common/message":25,"buffer":46}],2:[function(require,module,exports){
+},{"../../common/array/find":8,"../../common/deep_equal":19,"../../common/errors":20,"../../common/generate_id":22,"../../common/keys":24,"../../common/message":25,"buffer":47}],2:[function(require,module,exports){
 'use strict'
 
 var common = require('../common')
@@ -550,7 +550,7 @@ module.exports = function (Adapter) {
   return MemoryAdapter
 }
 
-},{"../../../common/apply_update":6,"../../../common/array/map":10,"../../../common/promise":27,"../common":1,"./helpers":2}],4:[function(require,module,exports){
+},{"../../../common/apply_update":6,"../../../common/array/map":10,"../../../common/promise":28,"../common":1,"./helpers":2}],4:[function(require,module,exports){
 'use strict'
 
 var assign = require('../common/assign')
@@ -864,7 +864,7 @@ Adapter.features = {}
 
 module.exports = Adapter
 
-},{"../common/assign":14,"../common/promise":27,"./adapters/memory":3}],5:[function(require,module,exports){
+},{"../common/assign":14,"../common/promise":28,"./adapters/memory":3}],5:[function(require,module,exports){
 'use strict'
 
 var Adapter = require('./')
@@ -907,7 +907,7 @@ function AdapterSingleton (properties) {
 
 module.exports = AdapterSingleton
 
-},{"../common":23,"../common/errors":20,"../common/keys":24,"../common/promise":27,"./":4}],6:[function(require,module,exports){
+},{"../common":23,"../common/errors":20,"../common/keys":24,"../common/promise":28,"./":4}],6:[function(require,module,exports){
 'use strict'
 
 var pull = require('./array/pull')
@@ -1212,7 +1212,7 @@ module.exports = function castValue (value, type, options) {
 }
 
 }).call(this,require("buffer").Buffer)
-},{"./cast_to_number":15,"./errors":20,"./message":25,"buffer":46}],17:[function(require,module,exports){
+},{"./cast_to_number":15,"./errors":20,"./message":25,"buffer":47}],17:[function(require,module,exports){
 'use strict'
 
 /**
@@ -1345,7 +1345,7 @@ function deepEqual (a, b) {
 module.exports = deepEqual
 
 }).call(this,{"isBuffer":require("../../node_modules/is-buffer/index.js")})
-},{"../../node_modules/is-buffer/index.js":50}],20:[function(require,module,exports){
+},{"../../node_modules/is-buffer/index.js":51}],20:[function(require,module,exports){
 'use strict'
 
 var responseClass = require('./response_classes')
@@ -1361,7 +1361,7 @@ exports.UnsupportedError = responseClass.UnsupportedError
 exports.UnprocessableError = responseClass.UnprocessableError
 exports.nativeErrors = responseClass.nativeErrors
 
-},{"./response_classes":28}],21:[function(require,module,exports){
+},{"./response_classes":29}],21:[function(require,module,exports){
 'use strict'
 
 var constants = require('./constants')
@@ -1432,7 +1432,7 @@ module.exports = {
   unique: require('./array/unique')
 }
 
-},{"./apply_update":6,"./array/filter":7,"./array/find":8,"./array/includes":9,"./array/map":10,"./array/pull":11,"./array/reduce":12,"./array/unique":13,"./assign":14,"./cast_to_number":15,"./cast_value":16,"./clone":17,"./constants":18,"./deep_equal":19,"./errors":20,"./events":21,"./generate_id":22,"./keys":24,"./message":25,"./methods":26,"./response_classes":28,"./success":29}],24:[function(require,module,exports){
+},{"./apply_update":6,"./array/filter":7,"./array/find":8,"./array/includes":9,"./array/map":10,"./array/pull":11,"./array/reduce":12,"./array/unique":13,"./assign":14,"./cast_to_number":15,"./cast_value":16,"./clone":17,"./constants":18,"./deep_equal":19,"./errors":20,"./events":21,"./generate_id":22,"./keys":24,"./message":25,"./methods":27,"./response_classes":29,"./success":30}],24:[function(require,module,exports){
 'use strict'
 
 var constants = require('./constants')
@@ -1447,6 +1447,13 @@ exports.denormalizedInverse = constants.denormalizedInverse
 },{"./constants":18}],25:[function(require,module,exports){
 'use strict'
 
+var languages = {
+  en: require('./messages/en')
+}
+
+var key
+for (key in languages)
+  message[key] = languages[key]
 
 module.exports = message
 
@@ -1475,7 +1482,12 @@ function message (id, language, data) {
 
   str = message[language][id]
 
-  for (key in data) str = str.replace('{' + key + '}', data[key])
+  if (typeof str === 'string')
+    for (key in data)
+      str = str.replace('{' + key + '}', data[key])
+
+  if (typeof str === 'function')
+    str = str(data)
 
   return str
 }
@@ -1504,52 +1516,49 @@ Object.defineProperty(message, 'copy', {
   }
 })
 
-// Default language messages.
-/* eslint-disable max-len */
-message.en = {
-  'GenericError': 'An internal error occurred.',
+},{"./messages/en":26}],26:[function(require,module,exports){
 
-  // Various errors.
-  'MalformedRequest': 'The request was malformed.',
-  'InvalidBody': 'The request body is invalid.',
-  'SerializerNotFound': 'The serializer for "{id}" does not exist.',
-  'InputOnly': 'Input only.',
-  'InvalidID': 'An ID is invalid.',
-  'DateISO8601': 'Date string must be an ISO 8601 formatted string.',
-  'DateInvalid': 'Date value is invalid.',
-  'BufferEncoding': 'Buffer value must be a {bufferEncoding}-encoded string.',
-  'JSONParse': 'Could not parse value as JSON.',
-  'MissingPayload': 'Payload is missing.',
-  'SpecifiedIDs': 'IDs should not be specified.',
-  'InvalidURL': 'Invalid URL.',
-  'RelatedRecordNotFound': 'A related record for the field "{field}" was not found.',
-  'CreateRecordsInvalid': 'There are no valid records to be created.',
-  'CreateRecordsFail': 'Records could not be created.',
-  'CreateRecordMissingID': 'An ID on a created record is missing.',
-  'DeleteRecordsMissingID': 'IDs are required for deleting records.',
-  'DeleteRecordsInvalid': 'A record to be deleted could not be found.',
-  'DeleteRecordsFail': 'Not all records specified could be deleted.',
-  'UnspecifiedType': 'The type is unspecified.',
-  'InvalidType': 'The requested type "{type}" is not a valid type.',
-  'InvalidLink': 'The field "{field}" does not define a link.',
-  'InvalidMethod': 'The method "{method}" is unrecognized.',
-  'CollisionToOne': 'Multiple records can not have the same to-one link value on the field "{field}".',
-  'CollisionDuplicate': 'Duplicate ID "{id}" in the field "{field}".',
-  'UpdateRecordMissing': 'A record to be updated could not be found.',
-  'UpdateRecordsInvalid': 'There are no valid updates.',
-  'UpdateRecordMissingID': 'An ID on an update is missing.',
-  'EnforceArrayType': 'The value of "{key}" is invalid, it must be an array with values of type "{type}".',
-  'EnforceArray': 'The value of "{key}" is invalid, it must be an array.',
-  'EnforceSameID': 'An ID of "{key}" is invalid, it cannot be the same ID of the record.',
-  'EnforceSingular': 'The value of "{key}" can not be an array, it must be a singular value.',
-  'EnforceValue': 'The value of "{key}" is invalid, it must be a "{type}".',
-  'EnforceValueArray': 'A value in the array of "{key}" is invalid, it must be a "{type}".',
-  'FieldsFormat': 'Fields format is invalid. It may either be inclusive or exclusive, but not both.',
-  'RecordExists': 'A record with ID "{id}" already exists.'
+module.exports = {
+  GenericError: function(d) { return "An internal error occurred."; },
+  MalformedRequest: function(d) { return "The request was malformed."; },
+  InvalidBody: function(d) { return "The request body is invalid."; },
+  SerializerNotFound: function(d) { return "The serializer for \"" + d.id + "\" does not exist."; },
+  InputOnly: function(d) { return "Input only."; },
+  InvalidID: function(d) { return "An ID is invalid."; },
+  DateISO8601: function(d) { return "Date string must be an ISO 8601 formatted string."; },
+  DateInvalid: function(d) { return "Date value is invalid."; },
+  BufferEncoding: function(d) { return "Buffer value must be a " + d.bufferEncoding + "-encoded string."; },
+  JSONParse: function(d) { return "Could not parse value as JSON."; },
+  MissingPayload: function(d) { return "Payload is missing."; },
+  SpecifiedIDs: function(d) { return "IDs should not be specified."; },
+  InvalidURL: function(d) { return "Invalid URL."; },
+  RelatedRecordNotFound: function(d) { return "A related record for the field \"" + d.field + "\" was not found."; },
+  CreateRecordsInvalid: function(d) { return "There are no valid records to be created."; },
+  CreateRecordsFail: function(d) { return "Records could not be created."; },
+  CreateRecordMissingID: function(d) { return "An ID on a created record is missing."; },
+  DeleteRecordsMissingID: function(d) { return "IDs are required for deleting records."; },
+  DeleteRecordsInvalid: function(d) { return "A record to be deleted could not be found."; },
+  DeleteRecordsFail: function(d) { return "Not all records specified could be deleted."; },
+  UnspecifiedType: function(d) { return "The type is unspecified."; },
+  InvalidType: function(d) { return "The requested type \"" + d.type + "\" is not a valid type."; },
+  InvalidLink: function(d) { return "The field \"" + d.field + "\" does not define a link."; },
+  InvalidMethod: function(d) { return "The method \"" + d.method + "\" is unrecognized."; },
+  CollisionToOne: function(d) { return "Multiple records can not have the same to-one link value on the field \"" + d.field + "\"."; },
+  CollisionDuplicate: function(d) { return "Duplicate ID \"" + d.id + "\" in the field \"" + d.field + "\"."; },
+  UpdateRecordMissing: function(d) { return "A record to be updated could not be found."; },
+  UpdateRecordsInvalid: function(d) { return "There are no valid updates."; },
+  UpdateRecordMissingID: function(d) { return "An ID on an update is missing."; },
+  EnforceArrayType: function(d) { return "The value of \"" + d.key + "\" is invalid, it must be an array with values of type \"" + d.type + "\"."; },
+  EnforceArray: function(d) { return "The value of \"" + d.key + "\" is invalid, it must be an array."; },
+  EnforceSameID: function(d) { return "An ID of \"" + d.key + "\" is invalid, it cannot be the same ID of the record."; },
+  EnforceSingular: function(d) { return "The value of \"" + d.key + "\" can not be an array, it must be a singular value."; },
+  EnforceValue: function(d) { return "The value of \"" + d.key + "\" is invalid, it must be a \"" + d.type + "\"."; },
+  EnforceValueArray: function(d) { return "A value in the array of \"" + d.key + "\" is invalid, it must be a \"" + d.type + "\"."; },
+  FieldsFormat: function(d) { return "Fields format is invalid. It may either be inclusive or exclusive, but not both."; },
+  RecordExists: function(d) { return "A record with ID \"" + d.id + "\" already exists."; }
 }
-/* eslint-enable max-len */
 
-},{}],26:[function(require,module,exports){
+},{}],27:[function(require,module,exports){
 'use strict'
 
 var constants = require('./constants')
@@ -1559,14 +1568,14 @@ exports.create = constants.create
 exports.update = constants.update
 exports.delete = constants.delete
 
-},{"./constants":18}],27:[function(require,module,exports){
+},{"./constants":18}],28:[function(require,module,exports){
 'use strict'
 
 // This object exists as a container for the Promise implementation. By
 // default, it's the native one.
 exports.Promise = Promise
 
-},{}],28:[function(require,module,exports){
+},{}],29:[function(require,module,exports){
 'use strict'
 
 var errorClass = require('error-class')
@@ -1606,7 +1615,7 @@ function successClass (name) {
     'assign(this, x) }')(assign)
 }
 
-},{"./assign":14,"error-class":47}],29:[function(require,module,exports){
+},{"./assign":14,"error-class":48}],30:[function(require,module,exports){
 'use strict'
 
 var responseClass = require('./response_classes')
@@ -1615,12 +1624,12 @@ exports.OK = responseClass.OK
 exports.Created = responseClass.Created
 exports.Empty = responseClass.Empty
 
-},{"./response_classes":28}],30:[function(require,module,exports){
+},{"./response_classes":29}],31:[function(require,module,exports){
 'use strict'
 
 window.fortune = require('./')
 
-},{"./":31}],31:[function(require,module,exports){
+},{"./":32}],32:[function(require,module,exports){
 'use strict'
 
 var EventLite = require('event-lite')
@@ -2216,7 +2225,7 @@ function bindMiddleware (scope, method) {
 
 module.exports = Fortune
 
-},{"./adapter":4,"./adapter/adapters/memory":3,"./adapter/singleton":5,"./common":23,"./common/promise":27,"./record_type/ensure_types":33,"./record_type/validate":34,"./request":41,"event-lite":48}],32:[function(require,module,exports){
+},{"./adapter":4,"./adapter/adapters/memory":3,"./adapter/singleton":5,"./common":23,"./common/promise":28,"./record_type/ensure_types":34,"./record_type/validate":35,"./request":42,"event-lite":49}],33:[function(require,module,exports){
 (function (Buffer){
 'use strict'
 
@@ -2358,7 +2367,7 @@ function matchId (a) {
 }
 
 }).call(this,require("buffer").Buffer)
-},{"../common/array/find":8,"../common/errors":20,"../common/keys":24,"../common/message":25,"buffer":46}],33:[function(require,module,exports){
+},{"../common/array/find":8,"../common/errors":20,"../common/keys":24,"../common/message":25,"buffer":47}],34:[function(require,module,exports){
 'use strict'
 
 var keys = require('../common/keys')
@@ -2445,7 +2454,7 @@ module.exports = function ensureTypes (types) {
   return denormalizedFields
 }
 
-},{"../common/keys":24}],34:[function(require,module,exports){
+},{"../common/keys":24}],35:[function(require,module,exports){
 (function (Buffer){
 'use strict'
 
@@ -2581,7 +2590,7 @@ function castShorthand (value) {
 }
 
 }).call(this,require("buffer").Buffer)
-},{"../common/array/find":8,"../common/array/map":10,"../common/keys":24,"buffer":46}],35:[function(require,module,exports){
+},{"../common/array/find":8,"../common/array/map":10,"../common/keys":24,"buffer":47}],36:[function(require,module,exports){
 'use strict'
 
 var message = require('../common/message')
@@ -2668,7 +2677,7 @@ function checkLinks (transaction, record, fields, links, meta) {
     })
 }
 
-},{"../common/array/includes":9,"../common/array/map":10,"../common/array/unique":13,"../common/errors":20,"../common/keys":24,"../common/message":25,"../common/promise":27}],36:[function(require,module,exports){
+},{"../common/array/includes":9,"../common/array/map":10,"../common/array/unique":13,"../common/errors":20,"../common/keys":24,"../common/message":25,"../common/promise":28}],37:[function(require,module,exports){
 'use strict'
 
 var validateRecords = require('./validate_records')
@@ -2895,7 +2904,7 @@ module.exports = function (context) {
     })
 }
 
-},{"../common/array/map":10,"../common/constants":18,"../common/errors":20,"../common/message":25,"../common/promise":27,"../record_type/enforce":32,"./check_links":35,"./update_helpers":43,"./validate_records":44}],37:[function(require,module,exports){
+},{"../common/array/map":10,"../common/constants":18,"../common/errors":20,"../common/message":25,"../common/promise":28,"../record_type/enforce":33,"./check_links":36,"./update_helpers":44,"./validate_records":45}],38:[function(require,module,exports){
 'use strict'
 
 var message = require('../common/message')
@@ -3041,7 +3050,7 @@ module.exports = function (context) {
     })
 }
 
-},{"../common/array/map":10,"../common/constants":18,"../common/errors":20,"../common/message":25,"../common/promise":27,"./update_helpers":43}],38:[function(require,module,exports){
+},{"../common/array/map":10,"../common/constants":18,"../common/errors":20,"../common/message":25,"../common/promise":28,"./update_helpers":44}],39:[function(require,module,exports){
 'use strict'
 
 var map = require('../common/array/map')
@@ -3126,7 +3135,7 @@ module.exports = function (context) {
     })
 }
 
-},{"../common/array/map":10,"../common/promise":27}],39:[function(require,module,exports){
+},{"../common/array/map":10,"../common/promise":28}],40:[function(require,module,exports){
 'use strict'
 
 /**
@@ -3156,7 +3165,7 @@ module.exports = function (context) {
     })
 }
 
-},{}],40:[function(require,module,exports){
+},{}],41:[function(require,module,exports){
 'use strict'
 
 var promise = require('../common/promise')
@@ -3362,7 +3371,7 @@ function matchId (id) {
   }
 }
 
-},{"../common/array/find":8,"../common/array/map":10,"../common/array/reduce":12,"../common/errors":20,"../common/keys":24,"../common/message":25,"../common/promise":27}],41:[function(require,module,exports){
+},{"../common/array/find":8,"../common/array/map":10,"../common/array/reduce":12,"../common/errors":20,"../common/keys":24,"../common/message":25,"../common/promise":28}],42:[function(require,module,exports){
 'use strict'
 
 var promise = require('../common/promise')
@@ -3518,7 +3527,7 @@ function setDefaults (options) {
 
 module.exports = internalRequest
 
-},{"../common/array/unique":13,"../common/assign":14,"../common/message":25,"../common/methods":26,"../common/promise":27,"../common/response_classes":28,"./create":36,"./delete":37,"./end":38,"./find":39,"./include":40,"./update":42}],42:[function(require,module,exports){
+},{"../common/array/unique":13,"../common/assign":14,"../common/message":25,"../common/methods":27,"../common/promise":28,"../common/response_classes":29,"./create":37,"./delete":38,"./end":39,"./find":40,"./include":41,"./update":43}],43:[function(require,module,exports){
 'use strict'
 
 var deepEqual = require('../common/deep_equal')
@@ -3911,7 +3920,7 @@ function dropFields (update, fields) {
     if (!fields.hasOwnProperty(field)) delete update.push[field]
 }
 
-},{"../common/apply_update":6,"../common/array/find":8,"../common/array/includes":9,"../common/array/map":10,"../common/assign":14,"../common/clone":17,"../common/constants":18,"../common/deep_equal":19,"../common/errors":20,"../common/message":25,"../common/promise":27,"../record_type/enforce":32,"./check_links":35,"./update_helpers":43,"./validate_records":44}],43:[function(require,module,exports){
+},{"../common/apply_update":6,"../common/array/find":8,"../common/array/includes":9,"../common/array/map":10,"../common/assign":14,"../common/clone":17,"../common/constants":18,"../common/deep_equal":19,"../common/errors":20,"../common/message":25,"../common/promise":28,"../record_type/enforce":33,"./check_links":36,"./update_helpers":44,"./validate_records":45}],44:[function(require,module,exports){
 'use strict'
 
 var find = require('../common/array/find')
@@ -3991,7 +4000,7 @@ exports.scrubDenormalizedUpdates = function (updates, denormalizedFields) {
   }
 }
 
-},{"../common/array/find":8,"../common/keys":24}],44:[function(require,module,exports){
+},{"../common/array/find":8,"../common/keys":24}],45:[function(require,module,exports){
 'use strict'
 
 var message = require('../common/message')
@@ -4062,7 +4071,7 @@ module.exports = function validateRecords (records, fields, links, meta) {
   }
 }
 
-},{"../common/errors":20,"../common/keys":24,"../common/message":25}],45:[function(require,module,exports){
+},{"../common/errors":20,"../common/keys":24,"../common/message":25}],46:[function(require,module,exports){
 'use strict'
 
 exports.byteLength = byteLength
@@ -4215,7 +4224,7 @@ function fromByteArray (uint8) {
   return parts.join('')
 }
 
-},{}],46:[function(require,module,exports){
+},{}],47:[function(require,module,exports){
 /*!
  * The buffer module from node.js, for the browser.
  *
@@ -5953,7 +5962,7 @@ function numberIsNaN (obj) {
   return obj !== obj // eslint-disable-line no-self-compare
 }
 
-},{"base64-js":45,"ieee754":49}],47:[function(require,module,exports){
+},{"base64-js":46,"ieee754":50}],48:[function(require,module,exports){
 'use strict'
 
 var hasCaptureStackTrace = 'captureStackTrace' in Error
@@ -6012,7 +6021,7 @@ function nonEnumerableProperty (value) {
   }
 }
 
-},{}],48:[function(require,module,exports){
+},{}],49:[function(require,module,exports){
 /**
  * event-lite.js - Light-weight EventEmitter (less than 1KB when gzipped)
  *
@@ -6194,7 +6203,7 @@ function EventLite() {
 
 })(EventLite);
 
-},{}],49:[function(require,module,exports){
+},{}],50:[function(require,module,exports){
 exports.read = function (buffer, offset, isLE, mLen, nBytes) {
   var e, m
   var eLen = nBytes * 8 - mLen - 1
@@ -6280,7 +6289,7 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
   buffer[offset + i - d] |= s * 128
 }
 
-},{}],50:[function(require,module,exports){
+},{}],51:[function(require,module,exports){
 /*!
  * Determine if an object is a Buffer
  *
@@ -6303,4 +6312,4 @@ function isSlowBuffer (obj) {
   return typeof obj.readFloatLE === 'function' && typeof obj.slice === 'function' && isBuffer(obj.slice(0, 0))
 }
 
-},{}]},{},[30]);
+},{}]},{},[31]);
