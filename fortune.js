@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.5.0
+ * Version 5.5.1
  * MIT License
  * http://fortune.js.org
  */
@@ -1500,9 +1500,9 @@ Object.defineProperty(message, 'defaultLanguage', {
 // Copy function, useful for not writing over the main function.
 Object.defineProperty(message, 'copy', {
   value: function () {
-    /* eslint-disable no-new-func */
-    var fn = new Function('return ' + message.toString())()
-    /* eslint-enable no-new-func */
+    var fn = function (id, language, data) {
+      message(id, language, data)
+    }
     var lang
 
     Object.defineProperty(fn, 'defaultLanguage', {
