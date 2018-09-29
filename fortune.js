@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.5.3
+ * Version 5.5.4
  * MIT License
  * http://fortune.js.org
  */
@@ -1583,9 +1583,9 @@ var assign = require('./assign')
 
 
 // Successes.
-exports.OK = successClass('OK')
-exports.Created = successClass('Created')
-exports.Empty = successClass('Empty')
+exports.OK = function OK (hash) { assign(this, hash) }
+exports.Created = function Created (hash) { assign(this, hash) }
+exports.Empty = function Empty (hash) { assign(this, hash) }
 
 
 // Errors.
@@ -1607,13 +1607,6 @@ exports.nativeErrors = [
   Error, TypeError, ReferenceError, RangeError,
   SyntaxError, EvalError, URIError
 ]
-
-
-function successClass (name) {
-  return Function('assign', // eslint-disable-line
-    'return function ' + name + ' (x) { ' +
-    'assign(this, x) }')(assign)
-}
 
 },{"./assign":14,"error-class":48}],30:[function(require,module,exports){
 'use strict'
