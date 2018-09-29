@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.5.4
+ * Version 5.5.5
  * MIT License
  * http://fortune.js.org
  */
@@ -6012,13 +6012,12 @@ function errorClass (name) {
 
   // This is basically `eval`, there's no other way to dynamically define a
   // function name.
-  ErrorClass = new Function('setupError',
-    'return function ' + name + ' () { ' +
-    'if (!(this instanceof ' + name + ')) ' +
-    'return new (' + name + '.bind.apply(' + name +
-      ', Array.prototype.concat.apply([ null ], arguments))); ' +
-    'setupError.apply(this, arguments); ' +
-    '}')(setupError)
+  ErrorClass = function CustomError () {
+    if (!(this instanceof CustomError))
+      return new (CustomError.bind.apply(CustomError,
+        Array.prototype.concat.apply([ null ], arguments)))
+    setupError.apply(this, arguments)
+  }
 
   ErrorClass.prototype = Object.create(Error.prototype, {
     constructor: nonEnumerableProperty(ErrorClass),
