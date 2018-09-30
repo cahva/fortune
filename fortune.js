@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.5.5
+ * Version 5.5.6
  * MIT License
  * http://fortune.js.org
  */
@@ -1847,8 +1847,8 @@ Fortune.prototype = new EventLite()
  *   ```js
  *   {
  *     settings: {
- *       // Whether or not to enforce referential integrity. Default: `true`
- *       // for server, `false` for browser.
+ *       // Whether or not to enforce referential integrity. This may be
+ *       // useful to disable on the client-side.
  *       enforceLinks: true,
  *
  *       // Name of the application used for display purposes.
@@ -2836,7 +2836,7 @@ module.exports = function (context) {
 
             // Unset 2nd degree related record for one-to-one case.
             if (!fieldIsArray &&
-            linked.hasOwnProperty(field) &&
+            linked[field] &&
             linked[field][inverseField] !== null &&
             !linkedIsArray &&
             linked[field][inverseField] !== record[primaryKey])
@@ -2848,7 +2848,7 @@ module.exports = function (context) {
 
           // Unset from 2nd degree related records for many-to-one case.
           if (fieldIsArray &&
-          linked.hasOwnProperty(field) && !linkedIsArray) {
+          linked[field] && !linkedIsArray) {
             partialRecords = Array.isArray(linked[field]) ?
               linked[field] : [ linked[field] ]
 
@@ -3737,7 +3737,7 @@ module.exports = function (context) {
                   inverseField, linkedIsArray)
 
               // Unset 2nd degree related record.
-              if (linked.hasOwnProperty(field) &&
+              if (linked[field] &&
               linked[field][inverseField] !== null &&
               !linkedIsArray &&
               linked[field][inverseField] !== update[primaryKey])
@@ -3827,7 +3827,7 @@ module.exports = function (context) {
           }
 
           // Unset from 2nd degree related records.
-          if (linked.hasOwnProperty(field) && !linkedIsArray) {
+          if (linked[field] && !linkedIsArray) {
             partialRecords = Array.isArray(linked[field]) ?
               linked[field] : [ linked[field] ]
 
