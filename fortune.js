@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.5.6
+ * Version 5.5.7
  * MIT License
  * http://fortune.js.org
  */
@@ -1495,25 +1495,6 @@ function message (id, language, data) {
 // Assign fallback language to "en".
 Object.defineProperty(message, 'defaultLanguage', {
   value: 'en', writable: true
-})
-
-// Copy function, useful for not writing over the main function.
-Object.defineProperty(message, 'copy', {
-  value: function () {
-    var fn = function (id, language, data) {
-      return message.call(fn, id, language, data)
-    }
-    var lang
-
-    Object.defineProperty(fn, 'defaultLanguage', {
-      value: 'en', writable: true
-    })
-
-    for (lang in message)
-      fn[lang] = message[lang]
-
-    return fn
-  }
 })
 
 },{"./messages/en":26}],26:[function(require,module,exports){
