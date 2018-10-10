@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.5.7
+ * Version 5.5.8
  * MIT License
  * http://fortune.js.org
  */
@@ -1850,7 +1850,7 @@ Fortune.prototype = new EventLite()
 Fortune.prototype.constructor = function Fortune (recordTypes, options) {
   var self = this
   var plainObject = {}
-  var message = common.message.copy()
+  var message = common.message
   var adapter, method, stack, flows, type, hooks, i, j
 
   if (recordTypes === void 0) recordTypes = {}
