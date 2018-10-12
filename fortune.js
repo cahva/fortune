@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.5.11
+ * Version 5.5.12
  * MIT License
  * http://fortune.js.org
  */
@@ -246,12 +246,13 @@ function findByType (type) {
       type.name === pair[0].name
 
     // In case this errors due to security sandboxing, just skip this check.
-    try {
-      if (!hasMatch) hasMatch = pair[0] === type.prototype.constructor
-    }
-    catch (e) {
-      // Swallow this error.
-    }
+    if (!hasMatch)
+      try {
+        hasMatch = pair[0] === type.prototype.constructor
+      }
+      catch (e) {
+        // Swallow this error.
+      }
 
     return hasMatch
   }
@@ -1203,7 +1204,7 @@ var castByType = [
  * @return {*}
  */
 module.exports = function castValue (value, type, options) {
-  var i, j, pair, cast
+  var i, j, pair, hasMatch, cast
 
   // Special case for empty string: it should be null.
   if (value === '') return null
@@ -1211,7 +1212,17 @@ module.exports = function castValue (value, type, options) {
   if (type)
     for (i = 0, j = castByType.length; i < j; i++) {
       pair = castByType[i]
-      if (pair[0] === type) {
+      hasMatch = pair[0] === type || pair[0].name === type.name
+
+      if (!hasMatch)
+        try {
+          hasMatch = pair[0] === type.prototype.constructor
+        }
+        catch (e) {
+          // Swallow this error.
+        }
+
+      if (hasMatch) {
         cast = pair[1]
         break
       }
