@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.5.10
+ * Version 5.5.11
  * MIT License
  * http://fortune.js.org
  */
@@ -108,9 +108,8 @@ function check (type, a, b) {
   if (!type) return a === b
   if (type.compare) return type.compare(a, b) === 0
 
-  matcher = find(matchCheck, function (pair) {
-    return pair[0] === type.prototype.constructor
-  })
+  matcher = find(matchCheck, findByType(type))
+
   if (matcher) return matcher[1](a, b)
 
   return a === b
@@ -243,7 +242,18 @@ function matchByRange (fields, ranges, record) {
 
 function findByType (type) {
   return function (pair) {
-    return pair[0] === type.prototype.constructor
+    var hasMatch = type === pair[0] ||
+      type.name === pair[0].name
+
+    // In case this errors due to security sandboxing, just skip this check.
+    try {
+      if (!hasMatch) hasMatch = pair[0] === type.prototype.constructor
+    }
+    catch (e) {
+      // Swallow this error.
+    }
+
+    return hasMatch
   }
 }
 
