@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.5.12
+ * Version 5.5.13
  * MIT License
  * http://fortune.js.org
  */
@@ -1928,21 +1928,17 @@ Fortune.prototype.constructor = function Fortune (recordTypes, options) {
     message: message
   })
 
+  self.options = options
+  self.hooks = hooks
+  self.recordTypes = recordTypes
+  self.adapter = adapter
+
   // Internal properties.
   Object.defineProperties(self, {
     // 0 = not started, 1 = started, 2 = done.
     connectionStatus: { value: 0, writable: true },
 
-    // Configuration settings.
-    options: { value: options },
-    hooks: { value: hooks },
-    recordTypes: { value: recordTypes, enumerable: true },
-    message: { value: message, enumerable: true },
-
-    // Singleton instances.
-    adapter: { value: adapter, enumerable: true, configurable: true },
-
-    // Various flows for methods.
+    message: { value: message },
     flows: { value: flows }
   })
 }
@@ -2530,12 +2526,13 @@ function validateField (fields, key) {
         type.name === value[typeKey].name
 
       // In case this errors due to security sandboxing, just skip this check.
-      try {
-        if (!hasMatch) hasMatch = new value[typeKey] instanceof type
-      }
-      catch (e) {
-        hasMatch = true
-      }
+      if (!hasMatch)
+        try {
+          hasMatch = Object.create(value[typeKey]) instanceof type
+        }
+        catch (e) {
+          hasMatch = true
+        }
 
       return hasMatch
     }))
