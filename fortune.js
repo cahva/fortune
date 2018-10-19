@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.5.13
+ * Version 5.5.14
  * MIT License
  * http://fortune.js.org
  */
@@ -2338,7 +2338,7 @@ function checkValue (field, key, value, meta) {
   if (value === null) return
 
   check = find(checkInput, function (pair) {
-    return pair[0] === type
+    return type && (pair[0] === type || pair[0].name === type.name)
   })
   if (check) check = check[1]
   else check = type
