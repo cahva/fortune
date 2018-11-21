@@ -1,6 +1,6 @@
 /*!
  * Fortune.js
- * Version 5.5.14
+ * Version 5.5.15
  * MIT License
  * http://fortune.js.org
  */
@@ -2438,7 +2438,9 @@ module.exports = function ensureTypes (types) {
       denormalizedDefinition[denormalizedInverseKey] = true
 
       Object.defineProperty(linkedFields, denormalizedField, {
-        value: denormalizedDefinition
+        value: denormalizedDefinition,
+        writable: true,
+        configurable: true
       })
     }
 
